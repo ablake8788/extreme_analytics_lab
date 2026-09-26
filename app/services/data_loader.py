@@ -85,12 +85,17 @@ def column_names(df: pd.DataFrame) -> list:
     return [str(c) for c in df.columns]
 
 
-def extract_series(df: pd.DataFrame, timestamp_col: str | None, value_col: str):
+def extract_series(df: pd.DataFrame, timestamp_col: str | None, value_col: str,
+                   start=None, end=None):
     """Returns (timestamps, values) as lists, in the file's time order.
 
     If no timestamp column is chosen but the loader built a DateTime column,
     DateTime is used automatically. A numeric epoch column (e.g.
     "Timestamp (UTC)") is converted to local date-times.
+
+    start / end (optional, inclusive) limit the series to a time period.
+    They accept anything pandas can parse, e.g. "2025-08-01T11:30" from an
+    HTML datetime-local input. Blank values mean "no limit".
     """
     if value_col not in df.columns:
         raise DataLoadError(f"Value column '{value_col}' not found.")
@@ -98,16 +103,68 @@ def extract_series(df: pd.DataFrame, timestamp_col: str | None, value_col: str):
     if values.isna().all():
         raise DataLoadError(f"Column '{value_col}' has no numeric data.")
 
+    timestamps = _resolve_timestamps(df, timestamp_col)
+    combined = pd.DataFrame({"ts": timestamps, "val": values}).dropna(subset=["val"])
+
+    start_ts, end_ts = _parse_bound(start, "From"), _parse_bound(end, "To")
+    if start_ts is not None or end_ts is not None:
+        if start_ts is not None and end_ts is not None and start_ts > end_ts:
+            raise DataLoadError("The 'From' time is after the 'To' time.")
+        ts = _as_datetimes(combined["ts"])
+        if ts is None or ts.isna().all():
+            raise DataLoadError(
+                "The time period filter needs a date/time column. "
+                "Choose DateTime (or another date column) as the timestamp column."
+            )
+        mask = ts.notna()
+        if start_ts is not None:
+            mask &= ts >= start_ts
+        if end_ts is not None:
+            mask &= ts <= end_ts
+        combined = combined[mask]
+        if combined.empty:
+            raise DataLoadError("No readings fall inside the selected time period.")
+
+    return list(combined["ts"]), list(combined["val"])
+
+
+def time_range(df: pd.DataFrame, timestamp_col: str | None):
+    """Returns (first, last, count) of the timestamp column as pandas
+    Timestamps, or (None, None, count) if it is not a date/time column."""
+    ts = _as_datetimes(_resolve_timestamps(df, timestamp_col))
+    valid = ts.dropna() if ts is not None else pd.Series(dtype="datetime64[ns]")
+    if valid.empty:
+        return None, None, int(len(df))
+    return valid.min(), valid.max(), int(len(valid))
+
+
+def _resolve_timestamps(df: pd.DataFrame, timestamp_col: str | None) -> pd.Series:
     if not timestamp_col and DATETIME_COL in df.columns:
         timestamp_col = DATETIME_COL
-
     if timestamp_col and timestamp_col in df.columns:
-        timestamps = _to_timestamps(df, timestamp_col)
-    else:
-        timestamps = pd.Series(range(1, len(df) + 1), index=df.index)
+        return _to_timestamps(df, timestamp_col)
+    return pd.Series(range(1, len(df) + 1), index=df.index)
 
-    combined = pd.DataFrame({"ts": timestamps, "val": values}).dropna(subset=["val"])
-    return list(combined["ts"]), list(combined["val"])
+
+def _as_datetimes(series: pd.Series):
+    """Datetime version of a timestamp series, or None when the series is
+    not date/time data (e.g. plain row numbers)."""
+    s = pd.Series(series)
+    if pd.api.types.is_datetime64_any_dtype(s):
+        return s
+    if pd.api.types.is_numeric_dtype(s):
+        return None  # row index or plain numbers, not times
+    return pd.to_datetime(s, errors="coerce")
+
+
+def _parse_bound(value, label: str):
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    try:
+        ts = pd.Timestamp(value)
+    except (ValueError, TypeError):
+        raise DataLoadError(f"Could not read the '{label}' time: {value}")
+    return None if pd.isna(ts) else ts.tz_localize(None) if ts.tzinfo else ts
 
 
 # --------------------------------------------------------------------------

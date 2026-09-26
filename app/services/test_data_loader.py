@@ -102,3 +102,45 @@ def test_simple_layout_row_index_when_no_timestamp(simple_xlsx):
     df = read_sheet(simple_xlsx, "Sensor Readings")
     ts, _ = extract_series(df, None, "SensorValue")
     assert ts[:3] == [1, 2, 3]
+
+
+# ---------------------------------------------------------------------------
+# Time period filter
+# ---------------------------------------------------------------------------
+from app.services.data_loader import DataLoadError, time_range  # noqa: E402
+
+
+def test_time_filter_from_to(sensor_xlsx):
+    df = read_sheet(sensor_xlsx, "Sheet1")
+    ts, vals = extract_series(df, None, VALUE_COL,
+                              start="2025-11-02T01:00", end="2025-11-02T01:50")
+    # 01:17:25 and 01:47:00 (first 01:xx pass) plus 01:02:03 (repeated hour)
+    assert vals == [72.3, 72.4, 72.6]
+    assert all(pd.Timestamp("2025-11-02 01:00") <= t <= pd.Timestamp("2025-11-02 01:50") for t in ts)
+
+
+def test_time_filter_open_ended(sensor_xlsx):
+    df = read_sheet(sensor_xlsx, "Sheet1")
+    _, vals = extract_series(df, None, VALUE_COL, start="2025-11-02T01:30", end="")
+    assert vals == [72.4, 72.9]
+    _, vals = extract_series(df, None, VALUE_COL, start=None, end="2025-11-02 01:00:00")
+    assert vals == [72.1]
+
+
+def test_time_filter_errors(sensor_xlsx, simple_xlsx):
+    df = read_sheet(sensor_xlsx, "Sheet1")
+    with pytest.raises(DataLoadError, match="No readings"):
+        extract_series(df, None, VALUE_COL, start="2030-01-01", end="2030-02-01")
+    with pytest.raises(DataLoadError, match="after"):
+        extract_series(df, None, VALUE_COL, start="2025-11-03", end="2025-11-01")
+    simple = read_sheet(simple_xlsx, "Sensor Readings")
+    with pytest.raises(DataLoadError, match="date/time column"):
+        extract_series(simple, None, "SensorValue", start="2026-06-02")
+
+
+def test_time_range(sensor_xlsx):
+    df = read_sheet(sensor_xlsx, "Sheet1")
+    first, last, n = time_range(df, None)
+    assert first == pd.Timestamp("2025-11-02 00:47:19")
+    assert last == pd.Timestamp("2025-11-02 02:01:45")
+    assert n == 5

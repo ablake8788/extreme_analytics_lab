@@ -1,0 +1,11 @@
+git checkout qa
+git pull origin qa
+git merge dev
+git push origin qa
+
+git checkout main
+git pull origin main
+git merge qa
+git push origin main
+
+git checkout dev
