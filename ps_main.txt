@@ -45,11 +45,12 @@ python apply_time_filter.py
 python apply_chart_explorer.py
 python apply_build_counter.py
 python apply_data_listing.py
+python apply_theme.py
 
 # Check the patches are in place
 Select-String -Path app\routes\api.py -Pattern "time_range" | Select-Object -First 1
 Select-String -Path app\static\js\app.js -Pattern "TIME PERIOD FILTER"
-Select-String -Path app\templates\index.html -Pattern "chart_explorer|build_badge|data_listing"
+Select-String -Path app\templates\index.html -Pattern "chart_explorer|build_badge|data_listing|theme"
 Select-String -Path app\routes\api.py -Pattern "DATA LISTING EXTRAS"
 
 # If the zip was already extracted inside the unzip folder, copy instead:
@@ -227,6 +228,12 @@ foreach ($d in $dataDirs) {
     $rel = $d.FullName.Substring($root.Length + 1)
     Write-Host "Bundling data folder: $rel" -ForegroundColor DarkGray
     $pyiArgs += @("--add-data", "$rel;$rel")
+}
+
+# config.ini (default parameters) and matplotlib's image backend for reports
+if (Test-Path "config.ini") { $pyiArgs += @("--add-data", "config.ini;.") }
+if (Select-String -Path "requirements.txt" -Pattern "matplotlib" -Quiet) {
+    $pyiArgs += @("--hidden-import", "matplotlib.backends.backend_agg")
 }
 
 # Include the whole app package and the Excel readers

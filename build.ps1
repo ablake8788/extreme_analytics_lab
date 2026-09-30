@@ -103,6 +103,12 @@ foreach ($d in $dataDirs) {
     $pyiArgs += @("--add-data", "$rel;$rel")
 }
 
+# config.ini (default parameters) and matplotlib's image backend for reports
+if (Test-Path "config.ini") { $pyiArgs += @("--add-data", "config.ini;.") }
+if (Select-String -Path "requirements.txt" -Pattern "matplotlib" -Quiet) {
+    $pyiArgs += @("--hidden-import", "matplotlib.backends.backend_agg")
+}
+
 # Include the whole app package and the Excel readers
 if (Test-Path "app\__init__.py") { $pyiArgs += @("--collect-submodules", "app") }
 $pyiArgs += @("--hidden-import", "openpyxl")
