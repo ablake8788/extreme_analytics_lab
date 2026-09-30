@@ -224,3 +224,43 @@ def time_range_route():
         "end": last.strftime(fmt) if last is not None else None,
         "count": count,
     })
+
+
+# === DATA LISTING EXTRAS (added by apply_data_listing.py) ===================
+# Adds category columns from the file (e.g. Day/Night) to each analysis row.
+import json as _dl_json
+from flask import request as _dl_request
+from app.services.data_loader import last_extras as _dl_last_extras, reset_extras as _dl_reset_extras
+
+
+@api_bp.before_request
+def _dl_reset_before_request():
+    _dl_reset_extras()
+
+
+@api_bp.after_request
+def _dl_add_category_columns(response):
+    try:
+        if _dl_request.method != "POST" or not response.is_json:
+            return response
+        extras = _dl_last_extras()
+        if not extras:
+            return response
+        data = response.get_json(silent=True)
+        if not isinstance(data, dict) or not isinstance(data.get("rows"), list) or not data["rows"]:
+            return response
+        rows = data["rows"]
+        cols = {name: values for name, values in extras.items() if len(values) == len(rows)}
+        if not cols:
+            return response
+        for i, row in enumerate(rows):
+            if isinstance(row, dict):
+                for name, values in cols.items():
+                    row[name] = values[i]
+        data["category_columns"] = list(cols)
+        response.set_data(_dl_json.dumps(data))
+    except Exception:
+        pass  # never break the analysis because of the listing extras
+    finally:
+        _dl_reset_extras()
+    return response

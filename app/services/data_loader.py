@@ -25,6 +25,7 @@ Every function keeps the same name and signature as before, so the routes
 """
 from __future__ import annotations
 
+import contextvars
 import datetime as _dt
 import math
 
@@ -41,6 +42,47 @@ _EPOCH_UNITS = {"seconds", "second", "s", "sec", "ms", "milliseconds"}
 
 class DataLoadError(Exception):
     pass
+
+
+# Category columns (e.g. "Day/Night") that belong to the rows returned by the
+# most recent extract_series() call in this request. api.py adds them to the
+# analysis rows so the data listing can show and filter them.
+_LAST_EXTRAS: contextvars.ContextVar = contextvars.ContextVar("last_extras", default=None)
+MAX_CATEGORY_VALUES = 12
+
+
+def last_extras():
+    """Returns {column: [values...]} aligned with the last extract_series()
+    result in this request, or None."""
+    return _LAST_EXTRAS.get()
+
+
+def reset_extras():
+    _LAST_EXTRAS.set(None)
+
+
+def category_columns(df: pd.DataFrame) -> list:
+    """Text columns with a handful of repeating values (2 to 12), such as
+    Day/Night. Single-value columns like Timezone are skipped."""
+    cols = []
+    for c in df.columns:
+        if c == DATETIME_COL:
+            continue
+        s = df[c]
+        if pd.api.types.is_numeric_dtype(s) or pd.api.types.is_datetime64_any_dtype(s):
+            continue
+        if c.strip().lower() in _DATE_NAMES | _TIME_NAMES:
+            continue
+        vals = s.dropna()
+        if vals.empty or not vals.map(lambda v: isinstance(v, str)).all():
+            continue
+        sample = vals.iloc[:50]
+        if sample.map(_looks_like_value).mean() > 0.5:  # dates, times, numbers as text
+            continue
+        n = vals.astype(str).str.strip().nunique()
+        if 2 <= n <= MAX_CATEGORY_VALUES and n < len(vals):
+            cols.append(c)
+    return cols
 
 
 # --------------------------------------------------------------------------
@@ -124,6 +166,10 @@ def extract_series(df: pd.DataFrame, timestamp_col: str | None, value_col: str,
         combined = combined[mask]
         if combined.empty:
             raise DataLoadError("No readings fall inside the selected time period.")
+
+    extras = {c: [None if pd.isna(v) else str(v).strip() for v in df.loc[combined.index, c]]
+              for c in category_columns(df)}
+    _LAST_EXTRAS.set(extras or None)
 
     return list(combined["ts"]), list(combined["val"])
 
