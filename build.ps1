@@ -62,6 +62,30 @@ if (Test-Path "tests") {
     Write-Host "No tests folder found - skipping tests." -ForegroundColor Yellow
 }
 
+# 3b. Build counter: next build number, stamped into app\static\build_info.json
+#     (bundled into the exe and shown in the app's corner badge)
+$infoPath = "app\static\build_info.json"
+$prevInfo = $null
+$lastBuild = 0
+if (Test-Path $infoPath) {
+    $prevInfo = [IO.File]::ReadAllText((Resolve-Path $infoPath))
+    try { $lastBuild = [int](($prevInfo | ConvertFrom-Json).build) } catch { $lastBuild = 0 }
+}
+$buildNo = $lastBuild + 1
+$branch = ""; $commit = ""
+try { $branch = (& git rev-parse --abbrev-ref HEAD 2>$null) } catch { }
+try { $commit = (& git rev-parse --short HEAD 2>$null) } catch { }
+$info = [ordered]@{
+    build    = $buildNo
+    version  = "1.0.$buildNo"
+    built_at = (Get-Date -Format "yyyy-MM-dd HH:mm")
+    branch   = "$branch".Trim()
+    commit   = "$commit".Trim()
+}
+if (-not (Test-Path "app\static")) { New-Item -ItemType Directory "app\static" | Out-Null }
+[IO.File]::WriteAllText((Join-Path (Get-Location).Path $infoPath), ($info | ConvertTo-Json))
+Write-Host "Build number: $buildNo (version $($info.version))" -ForegroundColor Cyan
+
 # 4. Find Flask templates/static folders so they get bundled into the exe
 $root = (Get-Location).Path
 $excluded = @(".venv", "build", "dist", ".git")
@@ -95,6 +119,9 @@ if (Test-Path "$AppName.spec") { Remove-Item -Force "$AppName.spec" }
 Write-Host "Building $AppName.exe (1-3 minutes)..." -ForegroundColor Yellow
 pyinstaller @pyiArgs
 if ($LASTEXITCODE -ne 0 -or -not (Test-Path "dist\$AppName.exe")) {
+    # Failed build does not use up a build number
+    if ($prevInfo) { [IO.File]::WriteAllText((Join-Path (Get-Location).Path $infoPath), $prevInfo) }
+    else { Remove-Item $infoPath -ErrorAction SilentlyContinue }
     Write-Host "`nBuild failed. Paste the error above into the chat." -ForegroundColor Red
     exit 1
 }
@@ -104,6 +131,7 @@ foreach ($d in @("build", "dist")) {
 }
 
 $size = [math]::Round((Get-Item "dist\$AppName.exe").Length / 1MB, 1)
-Write-Host "`nBuild succeeded! dist\$AppName.exe ($size MB)" -ForegroundColor Green
+Write-Host "`nBuild succeeded! dist\$AppName.exe ($size MB) - build $buildNo" -ForegroundColor Green
+Write-Host "Commit app\static\build_info.json so the build number is kept in git." -ForegroundColor DarkGray
 Write-Host "Run it with:  .\dist\$AppName.exe" -ForegroundColor Cyan
 Write-Host "Then open:    http://127.0.0.1:5100" -ForegroundColor Cyan

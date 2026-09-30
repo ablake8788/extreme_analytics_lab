@@ -21,6 +21,13 @@ if ($running) {
     Start-Sleep -Seconds 1
 }
 
+$infoPath = "app\static\build_info.json"
+if (Test-Path $infoPath) {
+    try {
+        $bi = Get-Content $infoPath -Raw | ConvertFrom-Json
+        Write-Host "Build $($bi.build) (version $($bi.version), built $($bi.built_at))" -ForegroundColor Cyan
+    } catch { }
+}
 Write-Host "Starting $Exe ..." -ForegroundColor Yellow
 Start-Process -FilePath (Resolve-Path $Exe)
 
