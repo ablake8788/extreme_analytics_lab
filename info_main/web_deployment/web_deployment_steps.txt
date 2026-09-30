@@ -64,7 +64,12 @@ PART B - PREPARE THE CODE ON YOUR PC
    ignores config.local.ini in git, and creates config.local.ini (private).
    Local use and the .exe are unchanged (mode = local, no login).
 
-   TEST THE LOGIN LOCALLY - edit config.local.ini:
+   RUN ALL TESTS AUTOMATICALLY (recommended):
+     .\test_all.ps1            (add -SkipExe to skip building the .exe)
+   It tests local mode, server mode with login, the password safety check,
+   passenger_wsgi and the .exe - without touching your config.local.ini.
+
+   OR TEST THE LOGIN BY HAND - edit config.local.ini:
      [app]
      mode = server
      [server]

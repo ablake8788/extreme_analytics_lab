@@ -23,6 +23,11 @@ git checkout dev
 # Start the .exe and open the browser
 .\launch.ps1
 
+# Run EVERY test (unit tests, local + server/login live checks, passenger_wsgi, .exe)
+.\test_all.ps1
+# Same without building the .exe (faster)
+.\test_all.ps1 -SkipExe
+
 # Stop a running .exe
 Stop-Process -Name ExtremeAnalyticsLab
 
@@ -147,6 +152,13 @@ $AppName = "ExtremeAnalyticsLab"
 
 Write-Host "== Extreme & Change Analytics Lab - EXE build ==" -ForegroundColor Cyan
 
+# 0a. The .exe always runs in local mode (no login)
+if ((Test-Path "config.ini") -and (Select-String -Path "config.ini" -Pattern '^\s*mode\s*=\s*server' -Quiet)) {
+    Write-Host "config.ini has mode = server. The .exe must be built with mode = local." -ForegroundColor Red
+    Write-Host "Set [app] mode = local in config.ini (use config.local.ini to test the login locally)." -ForegroundColor Red
+    exit 1
+}
+
 # 0. Sanity checks
 foreach ($f in @("run.py", "requirements.txt")) {
     if (-not (Test-Path $f)) {
@@ -169,8 +181,9 @@ Write-Host "Activating virtual environment..." -ForegroundColor Yellow
 & .\.venv\Scripts\Activate.ps1
 
 # 1b. Health check: a half-deleted venv (e.g. from a Dropbox lock) has a broken pip
-& .\.venv\Scripts\python.exe -m pip --version *> $null
-if ($LASTEXITCODE -ne 0) {
+$pipOk = $false
+try { & .\.venv\Scripts\python.exe -m pip --version *> $null; $pipOk = ($LASTEXITCODE -eq 0) } catch { $pipOk = $false }
+if (-not $pipOk) {
     Write-Host "Virtual environment is damaged (pip is broken). Recreating it..." -ForegroundColor Yellow
     if (Get-Command deactivate -ErrorAction SilentlyContinue) { deactivate }
     try { Remove-Item -Recurse -Force ".venv" -ErrorAction Stop }

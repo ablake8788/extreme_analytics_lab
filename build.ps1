@@ -35,8 +35,9 @@ Write-Host "Activating virtual environment..." -ForegroundColor Yellow
 & .\.venv\Scripts\Activate.ps1
 
 # 1b. Health check: a half-deleted venv (e.g. from a Dropbox lock) has a broken pip
-& .\.venv\Scripts\python.exe -m pip --version *> $null
-if ($LASTEXITCODE -ne 0) {
+$pipOk = $false
+try { & .\.venv\Scripts\python.exe -m pip --version *> $null; $pipOk = ($LASTEXITCODE -eq 0) } catch { $pipOk = $false }
+if (-not $pipOk) {
     Write-Host "Virtual environment is damaged (pip is broken). Recreating it..." -ForegroundColor Yellow
     if (Get-Command deactivate -ErrorAction SilentlyContinue) { deactivate }
     try { Remove-Item -Recurse -Force ".venv" -ErrorAction Stop }
