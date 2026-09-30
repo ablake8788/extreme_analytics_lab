@@ -46,6 +46,7 @@ python apply_chart_explorer.py
 python apply_build_counter.py
 python apply_data_listing.py
 python apply_theme.py
+python apply_web_deployment.py
 
 # Check the patches are in place
 Select-String -Path app\routes\api.py -Pattern "time_range" | Select-Object -First 1
@@ -93,6 +94,19 @@ git reset --hard origin/dev
 git checkout qa;   git pull origin qa;   git merge dev; git push origin qa
 git checkout main; git pull origin main; git merge qa;  git push origin main
 git checkout dev
+
+==============================================================================
+WEB DEPLOYMENT (GODADDY) - see info_main\web_deployment\web_deployment_steps.txt
+==============================================================================
+# Test the web login locally: edit config.local.ini  ([app] mode = server,
+#   [server] password = test123), then:
+python run.py
+# Check GoDaddy's start file loads
+python -c "import passenger_wsgi; print('passenger_wsgi OK')"
+# Set mode = local in config.local.ini again afterwards
+
+# Build the upload zip for GoDaddy
+.\make_server_zip.ps1
 
 ==============================================================================
 5. TROUBLESHOOTING

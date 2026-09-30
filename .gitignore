@@ -39,3 +39,7 @@ dist/
 # Patch backups
 *.bak
 .venv_old_*/
+
+# Web deployment - private settings and upload zip
+config.local.ini
+extreme_server.zip

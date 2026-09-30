@@ -23,4 +23,6 @@ def create_app(config_class=Config):
     Config.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     app.register_blueprint(web_bp)
     app.register_blueprint(api_bp)
+    from .security import init_security  # web login (server mode only)
+    init_security(app)
     return app

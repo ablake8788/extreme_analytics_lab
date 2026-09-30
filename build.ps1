@@ -6,6 +6,13 @@ $AppName = "ExtremeAnalyticsLab"
 
 Write-Host "== Extreme & Change Analytics Lab - EXE build ==" -ForegroundColor Cyan
 
+# 0a. The .exe always runs in local mode (no login)
+if ((Test-Path "config.ini") -and (Select-String -Path "config.ini" -Pattern '^\s*mode\s*=\s*server' -Quiet)) {
+    Write-Host "config.ini has mode = server. The .exe must be built with mode = local." -ForegroundColor Red
+    Write-Host "Set [app] mode = local in config.ini (use config.local.ini to test the login locally)." -ForegroundColor Red
+    exit 1
+}
+
 # 0. Sanity checks
 foreach ($f in @("run.py", "requirements.txt")) {
     if (-not (Test-Path $f)) {
