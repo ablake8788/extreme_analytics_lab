@@ -280,6 +280,9 @@ body .cx .cx-frame, body .dl .dl-wrap { border-color: var(--ti-line); border-rad
 body .dl h3 { font-family: var(--ti-display); font-size: 17px; font-weight: 600; margin: 26px 0 12px; }
 body .dl .dl-card { border-radius: var(--ti-radius); border-color: var(--ti-line); padding: 10px 14px; }
 body .dl .dl-card b { font-family: var(--ti-display); font-size: 16px; }
+body .dl .dl-card .dl-st { height: auto; padding: 3px 6px; border: none; background: none; font-weight: 400; }
+body .dl .dl-card .dl-st:hover { background: var(--ti-signal-soft); }
+body .dl .dl-card .dl-st-n { font-family: var(--ti-display); font-size: 14px; }
 body .dl th { background: #f3f5f7; color: #3a4753; font-weight: 600; }
 body .dl td.num { font-variant-numeric: tabular-nums; }
 body .dl tbody tr.dl-x { background: #fffaf1; box-shadow: inset 3px 0 0 var(--ti-amber); }

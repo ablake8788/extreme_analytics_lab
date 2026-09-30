@@ -65,6 +65,15 @@
       .dl-sum { display: flex; flex-wrap: wrap; gap: 10px; margin: 0 0 10px; }
       .dl-card { border: 1px solid #d7e0ea; border-radius: 10px; padding: 8px 12px; font-size: 12px; color: #5b6b7c; background: #fff; min-width: 180px; }
       .dl-card b { color: #16232e; font-size: 13px; }
+      .dl-card { min-width: 280px; }
+      .dl-states { margin-top: 8px; border-top: 1px solid #e6eaee; padding-top: 6px; }
+      .dl-st-head, .dl .dl-st { display: grid; grid-template-columns: 1fr 64px 52px; align-items: center; gap: 8px; }
+      .dl-st-head { font-size: 11px; color: #7a8591; padding: 0 6px 3px; }
+      .dl-st-head span:nth-child(n+2) { text-align: right; }
+      .dl .dl-st { width: 100%; height: auto; padding: 3px 6px; margin: 0; border: none; border-radius: 5px; background: none; text-align: left; font: inherit; cursor: pointer; }
+      .dl .dl-st:hover { background: #eef3fb; }
+      .dl-st-n { text-align: right; font-weight: 600; color: #16232e; font-variant-numeric: tabular-nums; }
+      .dl-st-p { text-align: right; color: #5b6b7c; font-size: 12px; font-variant-numeric: tabular-nums; }
       .dl-wrap { overflow-x: auto; border: 1px solid #d7e0ea; border-radius: 10px; }
       .dl table { width: 100%; border-collapse: collapse; font-size: 13px; }
       .dl th { position: sticky; top: 0; background: #f4f7fb; text-align: left; font-weight: 600; color: #3b4a59; padding: 7px 10px; border-bottom: 1px solid #d7e0ea; white-space: nowrap; }
@@ -237,6 +246,9 @@
     $q('[data-dl=count]').textContent = `Showing ${a.toLocaleString()}-${b.toLocaleString()} of ${S.filtered.length.toLocaleString()} rows${filteredNote}`;
   }
 
+  const STATE_ORDER = ['Normal', 'Extreme triggered', 'Extreme/elevated', 'Persistent',
+    'Confirmed/Materialized Shift', 'Persistence ends'];
+
   function renderSummary() {
     const host = $q('[data-dl=sum]');
     if (!S.cats.length) { host.innerHTML = ''; return; }
@@ -244,16 +256,46 @@
     const groups = {};
     for (const r of S.rows) {
       const k = r[c] || '(blank)';
-      const g = groups[k] || (groups[k] = { n: 0, x: 0, sum: 0, cnt: 0, min: Infinity, max: -Infinity });
+      const g = groups[k] || (groups[k] = { n: 0, x: 0, sum: 0, cnt: 0, min: Infinity, max: -Infinity, states: {} });
       g.n++;
       if (isExtreme(r)) g.x++;
+      const st = r.State || '(none)';
+      g.states[st] = (g.states[st] || 0) + 1;
       const v = Number(r.Value);
-      if (r.Value !== null && !Number.isNaN(v)) { g.sum += v; g.cnt++; if (v < g.min) g.min = v; if (v > g.max) g.max = v; }
+      if (r.Value !== null && r.Value !== undefined && !Number.isNaN(v)) {
+        g.sum += v; g.cnt++; if (v < g.min) g.min = v; if (v > g.max) g.max = v;
+      }
     }
-    host.innerHTML = Object.entries(groups).sort().map(([k, g]) =>
-      `<div class="dl-card">${catPill(k)}<br><b>${g.n.toLocaleString()}</b> readings, <b>${g.x.toLocaleString()}</b> extreme ` +
-      `(${g.n ? ((g.x / g.n) * 100).toFixed(1) : '0.0'}%)<br>avg ${g.cnt ? (g.sum / g.cnt).toFixed(2) : '-'}, ` +
-      `range ${g.cnt ? g.min.toFixed(2) : '-'} to ${g.cnt ? g.max.toFixed(2) : '-'}</div>`).join('');
+    const allStates = [...new Set(Object.values(groups).flatMap((g) => Object.keys(g.states)))];
+    allStates.sort((a, b) => ((STATE_ORDER.indexOf(a) + 99) % 99) - ((STATE_ORDER.indexOf(b) + 99) % 99));
+
+    host.innerHTML = Object.entries(groups).sort().map(([k, g]) => {
+      const pct = (n) => (g.n ? ((n / g.n) * 100).toFixed(1) : '0.0');
+      const stateRows = allStates.map((st) => {
+        const n = g.states[st] || 0;
+        return `<button type="button" class="dl-st" data-cat-val="${esc(k)}" data-state="${esc(st)}"` +
+          ` title="Show ${esc(k)} rows with state ${esc(st)}">` +
+          `<span class="dl-st-name">${st === '(none)' ? esc(st) : badge(st)}</span>` +
+          `<span class="dl-st-n">${n.toLocaleString()}</span><span class="dl-st-p">${pct(n)}%</span></button>`;
+      }).join('');
+      return `<div class="dl-card">${catPill(k)}<br><b>${g.n.toLocaleString()}</b> readings, <b>${g.x.toLocaleString()}</b> extreme ` +
+        `(${pct(g.x)}%)<br>avg ${g.cnt ? (g.sum / g.cnt).toFixed(2) : '-'}, ` +
+        `range ${g.cnt ? g.min.toFixed(2) : '-'} to ${g.cnt ? g.max.toFixed(2) : '-'}` +
+        `<div class="dl-states"><div class="dl-st-head"><span>State</span><span>Rows</span><span>Share</span></div>${stateRows}</div></div>`;
+    }).join('');
+
+    host.querySelectorAll('.dl-st').forEach((b) => {
+      b.onclick = () => {
+        S.catFilter[c] = b.dataset.catVal;
+        $q('[data-dl=catfilters]').querySelectorAll(`button[data-cat="${CSS.escape(c)}"]`)
+          .forEach((x) => x.classList.toggle('on', x.dataset.val === b.dataset.catVal));
+        const sel = $q('[data-dl=state]');
+        sel.value = b.dataset.state;
+        S.stateFilter = sel.value === b.dataset.state ? b.dataset.state : 'all';
+        applyFilters();
+        $q('.dl-wrap').scrollIntoView({ block: 'nearest' });
+      };
+    });
   }
 
   function findDate() {
