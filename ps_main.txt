@@ -52,6 +52,7 @@ python apply_build_counter.py
 python apply_data_listing.py
 python apply_theme.py
 python apply_web_deployment.py
+python apply_ai_report.py
 
 # Check the patches are in place
 Select-String -Path app\routes\api.py -Pattern "time_range" | Select-Object -First 1
@@ -112,6 +113,14 @@ python -c "import passenger_wsgi; print('passenger_wsgi OK')"
 
 # Build the upload zip for GoDaddy
 .\make_server_zip.ps1
+
+==============================================================================
+AI REPORT - see info_main\run_instructions\run_instructions.txt section 10
+==============================================================================
+# OpenAI key goes in config.local.ini only:  [openai]  api_key = sk-...
+notepad config.local.ini
+# What the app sees (never prints the key)
+python -c "from app.ai_settings import load_ai_settings as L; s=L(); print(s.public_status('local'))"
 
 ==============================================================================
 5. TROUBLESHOOTING
@@ -262,6 +271,12 @@ if (Test-Path "config.ini") { $pyiArgs += @("--add-data", "config.ini;.") }
 if (Select-String -Path "requirements.txt" -Pattern "matplotlib" -Quiet) {
     $pyiArgs += @("--hidden-import", "matplotlib.backends.backend_agg")
 }
+# python-docx needs its default Word template inside the exe (AI reports)
+if (Select-String -Path "requirements.txt" -Pattern "python-docx" -Quiet) {
+    $pyiArgs += @("--collect-data", "docx")
+}
+# the reference document for AI reports (relative path in config.ini)
+if (Test-Path "info_main\reference") { $pyiArgs += @("--add-data", "info_main\reference;info_main\reference") }
 
 # Include the whole app package and the Excel readers
 if (Test-Path "app\__init__.py") { $pyiArgs += @("--collect-submodules", "app") }

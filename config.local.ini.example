@@ -17,3 +17,12 @@ secret_key = replace-with-a-long-random-string-at-least-16-characters
 domain =
 upload_max_age_hours = 24
 session_hours = 12
+
+[openai]
+; your OpenAI API key - private, never committed
+; api_key = sk-...
+
+[reports]
+; optional: your own locations (override config.ini), for example
+; reference_document = C:\path\to\Titanium_analytics.docx
+; output_folder = C:\path\to\results

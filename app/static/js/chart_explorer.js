@@ -670,6 +670,8 @@
   // Public hook, in case app.js wants to call it directly
   window.ChartExplorer = {
     load,
+    pageRows: () => pageRows(),
+    pageInfo: () => ({ page: S.page + 1, pages: pageCount() }),
     goTo(i) {
       goToIndex(i);
       if (root) root.scrollIntoView({ behavior: 'smooth', block: 'center' });

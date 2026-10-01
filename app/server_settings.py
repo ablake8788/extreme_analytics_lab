@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import configparser
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -33,6 +34,11 @@ class ServerConfigError(RuntimeError):
     """Raised when server mode is switched on without a password/secret key."""
 
 
+def is_frozen() -> bool:
+    """True when running as the packaged .exe."""
+    return bool(getattr(sys, "frozen", False))
+
+
 def ini_paths() -> tuple[Path, Path | None]:
     shared = Path(os.environ.get("APP_CONFIG") or ROOT / "config.ini")
     local_env = os.environ.get("APP_CONFIG_LOCAL")
@@ -40,6 +46,15 @@ def ini_paths() -> tuple[Path, Path | None]:
         local = Path(local_env)
     elif "PYTEST_CURRENT_TEST" in os.environ:
         local = None  # tests never pick up the private file on this PC
+    elif is_frozen():
+        # The .exe looks for config.local.ini next to itself, then in the
+        # folder it was started from (launch.ps1 starts it from the project).
+        local = None
+        for candidate in (Path(sys.executable).resolve().parent / "config.local.ini",
+                          Path.cwd() / "config.local.ini"):
+            if candidate.exists():
+                local = candidate
+                break
     else:
         local = ROOT / "config.local.ini"
     return shared, local
@@ -94,20 +109,29 @@ class ServerSettings:
             )
 
 
+def get_setting(env: str | None, section: str, key: str, default=None, ini=None):
+    """One setting: environment variable > config.local.ini > config.ini > default."""
+    if env:
+        value = os.environ.get(env)
+        if value is not None and value.strip() != "":
+            return value.strip()
+    ini = ini if ini is not None else _read_ini()
+    if ini.has_option(section, key):
+        value = ini.get(section, key).strip()
+        if value != "":
+            return value
+    return default
+
+
 def load_settings() -> ServerSettings:
     ini = _read_ini()
 
     def get(env: str, section: str, key: str, default=None):
-        value = os.environ.get(env)
-        if value is not None and value.strip() != "":
-            return value.strip()
-        if ini.has_option(section, key):
-            value = ini.get(section, key).strip()
-            if value != "":
-                return value
-        return default
+        return get_setting(env, section, key, default, ini)
 
     mode = str(get("APP_MODE", "app", "mode", "local")).lower()
+    if is_frozen() and not os.environ.get("APP_MODE"):
+        mode = "local"  # the .exe never asks for a login
     if mode not in ("local", "server"):
         raise ServerConfigError(f"Unknown mode '{mode}'. Use 'local' or 'server'.")
     domain = get("APP_DOMAIN", "server", "domain", "")

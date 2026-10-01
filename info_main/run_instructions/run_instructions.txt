@@ -1,0 +1,225 @@
+EXTREME & CHANGE ANALYTICS LAB - RUN INSTRUCTIONS
+Project: C:\Users\ablak\MorrisAutoGroup Dropbox\Alexander Blake\MorrisUniversalAutoGroup\ara\ara\Ange\projects\ara\Titanium Intelligent Solution\Titanium Analytics\working\extreme_analytics_lab
+File:    info_main\run_instructions\run_instructions.txt
+
+Run every command in PowerShell from the project folder.
+Lines starting with # are notes, not commands.
+
+
+==============================================================================
+QUICK START
+==============================================================================
+  cd "C:\Users\ablak\MorrisAutoGroup Dropbox\Alexander Blake\MorrisUniversalAutoGroup\ara\ara\Ange\projects\ara\Titanium Intelligent Solution\Titanium Analytics\working\extreme_analytics_lab"
+  Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+
+  Everyday use (desktop app, no login):   .\launch.ps1
+  Development (from source, no login):    .\rebuild.ps1
+  Test the web login on this PC:          see section 3
+  Run every test:                         .\test_all.ps1
+
+  The app opens at:  http://127.0.0.1:5100
+  After any update press Ctrl+F5 in the browser.
+
+
+==============================================================================
+1. WAYS TO RUN THE APP
+==============================================================================
+  How it starts                         Login?   Use it for
+  ------------------------------------  -------  -----------------------------
+  .\launch.ps1  (the .exe)              never    everyday use on this PC
+  .\rebuild.ps1 / python run.py         no       development (mode = local)
+  python run.py with mode = server      yes      testing the web login
+  GoDaddy / web host (passenger_wsgi)   always   the real website
+
+  The .exe never has a login: it only listens on 127.0.0.1, so only this PC
+  can open it. The login matters once the app is on a web address.
+  Login = ONE shared password. There is no user name.
+
+
+==============================================================================
+2. RUN FROM SOURCE (DEVELOPMENT, NO LOGIN)
+==============================================================================
+  Clean setup + tests + start (recreates .venv):
+    .\rebuild.ps1
+
+  Quick start when .venv already exists:
+    .\.venv\Scripts\Activate.ps1
+    python run.py
+
+  Stop: Ctrl+C in the PowerShell window.
+  config.local.ini must have  mode = local  (or no mode line).
+
+
+==============================================================================
+3. RUN WITH THE LOGIN ON THIS PC (SERVER MODE)
+==============================================================================
+  a. Close the .exe if it is running (it holds port 5100):
+       Stop-Process -Name ExtremeAnalyticsLab -ErrorAction SilentlyContinue
+
+  b. Edit the private settings file:
+       notepad config.local.ini
+     Set:
+       [app]
+       mode = server
+
+       [server]
+       password = your-password
+     Save and close.
+
+  c. Start from source:
+       .\.venv\Scripts\Activate.ps1
+       python run.py
+
+  d. Open http://127.0.0.1:5100 and press Ctrl+F5 -> Sign in page.
+     After signing in, "Log out" is at the top right.
+
+  e. Check what the app sees (optional):
+       python -c "from app.server_settings import load_settings; s=load_settings(); print('mode:', s.mode, '| password set:', bool(s.password))"
+
+  f. When done: Ctrl+C, then set  mode = local  again in config.local.ini.
+
+  No login showing?
+    - You are running the .exe -> use python run.py instead
+    - Select-String -Path app\__init__.py -Pattern "init_security"
+      must print 2 lines; if not:  python apply_web_deployment.py
+    - config.local.ini: mode = server must be under [app]
+    - Old page cached -> Ctrl+F5
+
+
+==============================================================================
+4. THE DESKTOP APP (.EXE)
+==============================================================================
+  Build (runs tests first, raises the build number):
+    .\build.ps1
+  Result: dist\ExtremeAnalyticsLab.exe
+
+  Start it and open the browser:
+    .\launch.ps1
+
+  Stop it:
+    Stop-Process -Name ExtremeAnalyticsLab
+
+  The badge in the bottom-right corner shows the build number; click it for
+  date, branch and commit. Save the number in git after each build:
+    git add app/static/build_info.json
+    git commit -m "Build N"
+    git push origin dev
+
+  build.ps1 refuses to build if config.ini says mode = server
+  (the .exe must always be local mode).
+
+
+==============================================================================
+5. TESTS
+==============================================================================
+  Everything (unit tests, live local + login checks, passenger_wsgi, .exe):
+    .\test_all.ps1
+  Faster, without building the .exe:
+    .\test_all.ps1 -SkipExe
+  Only the unit tests:
+    .\.venv\Scripts\Activate.ps1
+    python -m pytest tests -q
+  Expect at the end:  ALL TESTS PASSED
+  test_all.ps1 never reads or changes config.local.ini.
+
+
+==============================================================================
+6. USING THE APP
+==============================================================================
+  1 Upload data       CSV or Excel file (e.g. Jensen_Beach_AHU1_temperature.xlsx)
+  2 Select columns    DateTime + value column are pre-selected
+                      Time period (optional): From / To, "Full range" resets
+  3 Parameters        For 15-minute readings use Window = 96 (one day)
+                      and ROC baseline window = 96
+  4 Results           readout, chart explorer, data listing
+
+  Chart explorer: points per page, page arrows, Stretch - Fit +,
+    Ctrl + mouse wheel to zoom, drag to scroll, Height, series checkboxes,
+    Extreme < > to jump between events,
+    Save: View (PNG), Full page (PNG), Data (CSV).
+  Data listing: Day/Night cards with state counts (click a state to filter),
+    Day/Night and State filters, rows per page, Go to date,
+    Export filtered (CSV), click a row to show it on the chart.
+
+
+==============================================================================
+7. SETTINGS FILES
+==============================================================================
+  config.ini          shared defaults, in git, packed into the .exe.
+                      [app] mode = local. NEVER put a password here.
+  config.local.ini    PRIVATE, this PC only, never committed or uploaded.
+                      mode, password, secret key for local login testing.
+  Environment vars    web host only (APP_MODE, APP_PASSWORD, APP_SECRET_KEY,
+                      APP_DOMAIN). They override both ini files.
+  Order (later wins): config.ini > config.local.ini > environment variables.
+
+
+==============================================================================
+8. SCRIPTS IN THE PROJECT FOLDER
+==============================================================================
+  launch.ps1                start the .exe and open the browser
+  build.ps1                 tests + build number + build the .exe
+  rebuild.ps1               fresh .venv + tests + run from source
+  test_all.ps1              every test in one command
+  make_server_zip.ps1       extreme_server.zip for web hosting
+  apply_*.py                one-time patches (safe to run again)
+  ps_main.txt               all PowerShell commands
+  info_main\web_deployment\web_deployment_steps_1.txt   web deployment guide
+
+
+==============================================================================
+9. TROUBLESHOOTING
+==============================================================================
+  Script "is not recognized"      -> not in the project folder:  dir *.ps1
+  Scripts blocked                 -> Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+                                     Get-ChildItem *.ps1 | Unblock-File
+  Port 5100 busy / old app shows  -> Stop-Process -Name ExtremeAnalyticsLab
+  .venv locked / pip broken       -> close VS Code and app windows, pause Dropbox,
+                                     then .\rebuild.ps1
+  config.py error on line 1       -> Get-Content app\config.py -TotalCount 1
+                                     must print: import configparser
+  Browser shows old page          -> Ctrl+F5
+  Anything else                   -> copy the last 30-40 lines of red text
+                                     and ask for help
+
+
+==============================================================================
+10. AI REPORT (OPENAI + WORD)
+==============================================================================
+  One-time setup:
+    python apply_ai_report.py
+    notepad config.local.ini
+  Under [openai] remove the ; and set your key:
+    [openai]
+    api_key = sk-...
+  Optional - your own locations (otherwise config.ini defaults are used):
+    [reports]
+    reference_document = C:\path\to\Titanium_analytics.docx
+    output_folder = C:\path\to\results
+  Then  .\rebuild.ps1  (installs python-docx).
+
+  Where settings live (later wins: config.ini > config.local.ini > env):
+    api_key ............ config.local.ini ONLY (or OPENAI_API_KEY)
+    model, timeout ..... config.ini [openai]
+    reference_document . config.ini [reports]  (default info_main/reference/Titanium_analytics.docx)
+    output_folder ...... config.ini [reports]  (default results)
+
+  In the app (after Run analysis), panel "AI report":
+    Location / sensor name, Units, Results to use:
+      All results | Current chart page | A saved results CSV file...
+    Save results CSV...          Save As dialog - choose folder and name
+    Generate AI report (Word)... Save As dialog first, then the report is
+                                 generated and written there; in local mode a
+                                 copy also goes to the reports folder.
+  Save As dialogs need Edge or Chrome; other browsers download instead.
+  The status line under the buttons shows: OpenAI on/off, reference found,
+  reports folder.
+
+  How the report is made:
+    1. the app computes every number (abnormalities, gaps, changes,
+       volatility, window comparison) - tables are filled only from these
+    2. OpenAI writes the wording from those facts + the reference document
+    3. any AI sentence with a number not found in the data is removed
+    4. no key / OpenAI error -> the report is still made with plain wording
+  The .exe reads config.local.ini (next to the .exe or in the folder it is
+  started from) for the key, and still never asks for a login.

@@ -22,6 +22,11 @@ $stage = Join-Path $env:TEMP "extreme_server_stage"
 if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
 New-Item -ItemType Directory $stage | Out-Null
 foreach ($i in $items) { Copy-Item $i -Destination $stage -Recurse -Force }
+# reference document for AI reports (config.ini: [reports] reference_document)
+if (Test-Path "info_main\reference") {
+    New-Item -ItemType Directory (Join-Path $stage "info_main") -Force | Out-Null
+    Copy-Item "info_main\reference" -Destination (Join-Path $stage "info_main") -Recurse -Force
+}
 
 # Remove caches, backups and anything private
 Get-ChildItem $stage -Recurse -Force -Include "__pycache__", "*.pyc", "*.bak", "config.local.ini" |

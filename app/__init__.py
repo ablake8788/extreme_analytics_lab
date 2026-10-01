@@ -23,6 +23,8 @@ def create_app(config_class=Config):
     Config.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     app.register_blueprint(web_bp)
     app.register_blueprint(api_bp)
+    from .routes.ai_report import ai_report_bp  # AI results reports
+    app.register_blueprint(ai_report_bp)
     from .security import init_security  # web login (server mode only)
     init_security(app)
     return app

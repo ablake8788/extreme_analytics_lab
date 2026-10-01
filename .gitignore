@@ -43,3 +43,6 @@ dist/
 # Web deployment - private settings and upload zip
 config.local.ini
 extreme_server.zip
+
+# AI reports contain sensor data
+results/

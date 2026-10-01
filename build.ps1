@@ -116,6 +116,12 @@ if (Test-Path "config.ini") { $pyiArgs += @("--add-data", "config.ini;.") }
 if (Select-String -Path "requirements.txt" -Pattern "matplotlib" -Quiet) {
     $pyiArgs += @("--hidden-import", "matplotlib.backends.backend_agg")
 }
+# python-docx needs its default Word template inside the exe (AI reports)
+if (Select-String -Path "requirements.txt" -Pattern "python-docx" -Quiet) {
+    $pyiArgs += @("--collect-data", "docx")
+}
+# the reference document for AI reports (relative path in config.ini)
+if (Test-Path "info_main\reference") { $pyiArgs += @("--add-data", "info_main\reference;info_main\reference") }
 
 # Include the whole app package and the Excel readers
 if (Test-Path "app\__init__.py") { $pyiArgs += @("--collect-submodules", "app") }
