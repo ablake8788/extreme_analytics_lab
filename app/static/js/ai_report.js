@@ -218,11 +218,11 @@
 
   // ------------------------------------------------------------ UI
   function build() {
-    root = document.createElement('section');
-    root.className = 'panel ar-panel';
+    root = document.createElement('div');
+    root.className = 'ar-panel';
     root.id = 'aiReportPanel';
     root.innerHTML = `
-      <h2>AI report</h2>
+      <h3 class="ar-title">AI report</h3>
       <p class="muted" style="margin-top:-6px">Save the results, or turn them into a Word report with findings and recommendations.</p>
       <div class="controls ar-controls">
         <div><label for="arLocation">Location / sensor name</label><input type="text" id="arLocation" data-ar="location"></div>
@@ -245,6 +245,10 @@
       <p data-ar="msg" role="status" style="margin:8px 0 0;font-size:13.5px;line-height:1.5"></p>`;
     const st = document.createElement('style');
     st.textContent = `
+      .ar-panel { margin: 22px 0 6px; padding: 16px 18px 14px; background: #fff; border: 1px solid #d5dbe1;
+                  border-left: 4px solid #2f6fed; border-radius: 8px; }
+      .ar-panel .ar-title { font-size: 17px; font-weight: 600; margin: 0 0 4px; }
+      .ar-panel > p.muted { margin: 0 0 12px !important; }
       .ar-panel .ar-controls { display:grid; grid-template-columns: minmax(0,2fr) minmax(0,.6fr) minmax(0,1.4fr); gap:14px 18px; }
       .ar-panel .ar-controls input, .ar-panel .ar-controls select { width:100%; }
       .ar-panel button.ar-secondary { background:#fff; color:#1f2a33; border:1px solid #d5dbe1; }
@@ -253,9 +257,7 @@
       @media (max-width: 760px) { .ar-panel .ar-controls { grid-template-columns: 1fr; } }`;
     document.head.appendChild(st);
 
-    const results = document.getElementById('resultsPanel');
-    if (results && results.parentNode) results.parentNode.insertBefore(root, results.nextSibling);
-    else (document.querySelector('main') || document.body).appendChild(root);
+    placePanel();
 
     $('[data-ar=location]').value = defaultLocation();
     $('[data-ar=units]').value = unitsFromColumn();
@@ -269,6 +271,31 @@
     $('[data-ar=generate]').onclick = generate;
     updateSource();
     loadStatus();
+  }
+
+  // Put the panel inside Results, just before the Data listing. The listing is
+  // created by data_listing.js, possibly after this panel, so watch for it.
+  function placePanel() {
+    const listing = document.querySelector('.dl');
+    if (listing && listing.parentNode) {
+      if (root.nextElementSibling !== listing) listing.parentNode.insertBefore(root, listing);
+      return true;
+    }
+    if (!root.isConnected) {
+      const results = document.getElementById('resultsPanel');
+      if (results) results.appendChild(root);
+      else (document.querySelector('main') || document.body).appendChild(root);
+    }
+    if (!placePanel._watching) {
+      placePanel._watching = true;
+      const mo = new MutationObserver(() => {
+        const l = document.querySelector('.dl');
+        if (l && l.parentNode && root.nextElementSibling !== l) l.parentNode.insertBefore(root, l);
+      });
+      mo.observe(document.body, { childList: true, subtree: true });
+      setTimeout(() => mo.disconnect(), 15000);
+    }
+    return false;
   }
 
   function updateSource() {
@@ -309,7 +336,7 @@
           if (!Array.isArray(d.rows) || !d.rows.length) return;
           rows = d.rows;
           setTimeout(() => {
-            if (!root) build();
+            if (!root) build(); else placePanel();
             const unitsEl = $('[data-ar=units]');
             if (!unitsEl.value) unitsEl.value = unitsFromColumn();
             updateSource();
