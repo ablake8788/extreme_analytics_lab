@@ -1,9 +1,34 @@
+
 EXTREME & CHANGE ANALYTICS LAB - RUN INSTRUCTIONS
 Project: C:\Users\ablak\MorrisAutoGroup Dropbox\Alexander Blake\MorrisUniversalAutoGroup\ara\ara\Ange\projects\ara\Titanium Intelligent Solution\Titanium Analytics\working\extreme_analytics_lab
 File:    info_main\run_instructions\run_instructions.txt
 
 Run every command in PowerShell from the project folder.
 Lines starting with # are notes, not commands.
+
+
+
+
+
+start the app, with and without the security (login) check.
+
+#	Command	Login?	Notes
+1	.\launch.ps1	No	The .exe, for everyday use. It never has a login.
+2	.\rebuild.ps1	Follows config.local.ini	Fresh .venv, tests, then runs from source.
+3	python run.py	Follows config.local.ini	Quick start from source.
+4	python run.py with APP_MODE=local	No	Forces no login, whatever the ini says.
+5	python run.py with APP_MODE=server	Yes	Forces the login. The password comes from config.local.ini.
+6	GoDaddy or another web host	Always	Starts through passenger_wsgi.py.
+
+
+
+
+
+
+
+
+
+
 
 
 ==============================================================================
