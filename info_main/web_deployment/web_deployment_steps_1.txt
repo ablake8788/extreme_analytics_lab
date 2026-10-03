@@ -1,245 +1,131 @@
-EXTREME & CHANGE ANALYTICS LAB - WEB DEPLOYMENT STEPS (GODADDY), VERSION 1
-Project: C:\Users\ablak\MorrisAutoGroup Dropbox\Alexander Blake\MorrisUniversalAutoGroup\ara\ara\Ange\projects\ara\Titanium Intelligent Solution\Titanium Analytics\working\extreme_analytics_lab
-File:    info_main\web_deployment\web_deployment_steps_1.txt
+EXTREME & CHANGE ANALYTICS LAB - WEB DEPLOYMENT STEPS (GODADDY)
+Project: extreme_analytics_lab
+File:    info_main\web_deployment\web_deployment_steps.txt
 
-Run every PowerShell command from the project folder unless noted.
-Lines starting with # are notes, not commands.
+Part B, step 5 needs the deployment package (passenger_wsgi.py, login page,
+server settings). It is not built yet - ask for it once Part A is done.
 
 
 ==============================================================================
-KEY FACTS
+BEFORE YOU START - KEY FACTS
 ==============================================================================
-- You deploy the SOURCE CODE to GoDaddy (app\, run.py, passenger_wsgi.py,
-  requirements.txt, config.ini) - not the .exe. Web hosting runs Linux.
-- One code base, three ways to run it:
-
-    How it starts                     Login?        Used for
-    --------------------------------  ------------  ---------------------------
-    .\launch.ps1  (the .exe)          never         everyday use on your PC
-    python run.py  (mode = local)     no            development on your PC
-    python run.py  (mode = server)    yes           testing the web login
-    GoDaddy  (passenger_wsgi.py)      always        the real website
-
-- Login = ONE shared password. There is no user name.
-- Settings are read in this order; later wins:
-    1. config.ini          shared, in git, packed into the .exe (NO secrets)
-    2. config.local.ini    private, this PC only, never committed
-    3. environment variables   GoDaddy (cPanel > Setup Python App)
+- You deploy the SOURCE CODE (app\, run.py, requirements.txt), not the .exe.
+  The .exe is a Windows desktop program; web hosting runs Linux.
+- The same code still runs locally on your PC (http://127.0.0.1:5100) with
+  login off. GoDaddy switches to server mode through environment variables.
 - Where the domain name is kept:
-    1. Registration: GoDaddy > My Products > Domains (or the company's registrar)
-    2. DNS: a record pointing the name to the GoDaddy hosting
-    3. The app: environment variable APP_DOMAIN (never in the code)
-- Safety: in server mode the app refuses to start without a password and a
-  secret key, so it is never online unprotected. build.ps1 refuses to build
-  the .exe if config.ini says mode = server.
+    1. Registration: GoDaddy account > My Products > Domains
+       (or wherever the company domain is already registered)
+    2. DNS: a record that points the name to the GoDaddy hosting
+    3. The app: as an environment variable on GoDaddy (APP_DOMAIN),
+       never hard-coded in the code
+- Password and secret key are GoDaddy environment variables only.
+  They never go into git.
 
 
 ==============================================================================
 PART A - GODADDY ACCOUNT SETUP (about 30 minutes)
 ==============================================================================
 1. GET THE RIGHT HOSTING PLAN
-   godaddy.com > My Products.
-   - Have Web Hosting: Manage > cPanel Admin > Software > "Setup Python App".
-   - No hosting: buy Web Hosting (cPanel, Linux). Ask GoDaddy chat first:
-     "Does this plan include Setup Python App for Python 3.9 or newer?"
+   Sign in at godaddy.com > My Products.
+   - Already have Web Hosting: Manage > cPanel Admin > under Software,
+     look for "Setup Python App".
+   - No hosting yet: buy Web Hosting (cPanel, Linux). Before paying, ask
+     GoDaddy chat: "Does this plan include Setup Python App for Python 3.9
+     or newer?"
    - Do NOT use Windows/Plesk hosting.
-   - "Setup Python App" missing: ask GoDaddy support to enable Python.
+   - If "Setup Python App" is missing, contact GoDaddy support to enable
+     Python support on the plan.
 
 2. CHOOSE THE ADDRESS
    Option 1 - subdomain of an existing company domain (recommended):
      cPanel > Domains > Create a New Domain (or Subdomains)
      e.g. analytics.yourcompany.com
-     DNS managed outside GoDaddy: add an A record for "analytics" pointing
-     to the hosting IP (shown in cPanel's right-hand panel).
-   Option 2 - new domain: GoDaddy > Domains > buy, then cPanel > Domains.
+     If the company domain's DNS is managed outside GoDaddy, whoever manages
+     it adds an A record for "analytics" pointing to the hosting IP
+     (shown in cPanel's right-hand panel).
+   Option 2 - new domain:
+     GoDaddy > Domains > buy it, then attach it in cPanel > Domains.
 
 3. TURN ON HTTPS
-   cPanel > Security > SSL/TLS Status > select the domain > Run AutoSSL
-   (can take up to an hour).
+   cPanel > Security > SSL/TLS Status > select the domain > Run AutoSSL.
+   Can take up to an hour.
 
 4. TURN ON SSH (optional, recommended)
-   My Products > Web Hosting > Manage > Settings > SSH access > on.
+   My Products > Web Hosting > Manage > Settings > SSH access > turn on.
 
 
 ==============================================================================
-PART B - PREPARE AND TEST ON YOUR PC
+PART B - PREPARE THE CODE ON YOUR PC
 ==============================================================================
-5. INSTALL THE LATEST UPDATES (all in one zip)
-     $unzipDir = "C:\Users\ablak\MorrisAutoGroup Dropbox\Alexander Blake\MorrisUniversalAutoGroup\ara\ara\Ange\projects\ara\Titanium Intelligent Solution\Titanium Analytics\working\unzip"
-     $zip = (Get-ChildItem "$env:USERPROFILE\Downloads", $unzipDir -Filter "extreme_all_updates*.zip" -ErrorAction SilentlyContinue |
-         Sort-Object LastWriteTime -Descending | Select-Object -First 1).FullName
-     $zip
-     Expand-Archive $zip -DestinationPath . -Force
-     Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+5. BUILD THE DEPLOYMENT PACKAGE  (to be provided)
+   Adds: passenger_wsgi.py, login page, server mode via environment
+   variables, automatic clean-up of old uploads.
+   Test locally as usual:
+     .\rebuild.ps1
+   Local app and .exe stay unchanged (login off).
 
-   Apply the one-time patches (safe to run again - they skip what is done):
-     python apply_time_filter.py
-     python apply_chart_explorer.py
-     python apply_build_counter.py
-     python apply_data_listing.py
-     python apply_theme.py
-     python apply_web_deployment.py
-
-   apply_web_deployment.py:
-     - adds 2 lines to app\__init__.py:  init_security(app)
-     - adds  mode = local  to [app] in config.ini
-     - adds config.local.ini and extreme_server.zip to .gitignore
-     - creates config.local.ini (private) with a random secret key
-
-6. RUN ALL TESTS (one command)
-     .\test_all.ps1              everything, including building the .exe
-     .\test_all.ps1 -SkipExe     faster, without the .exe
-   Tests: pytest unit tests; local mode live (no login, upload + analysis);
-   server mode live (sign-in, wrong/right password, API blocked, upload +
-   analysis, log out); refuses to start without a password; passenger_wsgi;
-   .exe builds, starts and has no login; config.local.ini unchanged.
-   Expect at the end:  ALL TESTS PASSED
-   Your config.local.ini is never read or changed by these tests.
-
-7. SEE THE LOGIN YOURSELF (optional, by hand)
-     Stop-Process -Name ExtremeAnalyticsLab -ErrorAction SilentlyContinue
-     notepad config.local.ini
-   Set:
-     [app]
-     mode = server
-     [server]
-     password = test123
-   Save, then:
-     python run.py
-   Open http://127.0.0.1:5100, press Ctrl+F5 -> Sign in page.
-   Check what the app sees:
-     python -c "from app.server_settings import load_settings; s=load_settings(); print('mode:', s.mode, '| password set:', bool(s.password))"
-   Check GoDaddy's start file:
-     python -c "import passenger_wsgi; print('passenger_wsgi OK')"
-   Afterwards: Ctrl+C, set  mode = local  again in config.local.ini.
-
-   No login showing? Check:
-     - Not the .exe (it never has a login) - use python run.py
-     - Select-String -Path app\__init__.py -Pattern "init_security"
-       (must print 2 lines; if not: python apply_web_deployment.py)
-     - config.local.ini has mode = server under [app]
-
-8. BUILD AND LAUNCH THE .EXE (everyday desktop app, no login)
-     .\build.ps1        (skip if test_all.ps1 already built it)
-     .\launch.ps1
-   Press Ctrl+F5 in the browser; the badge shows the build number.
-
-9. COMMIT TO GIT
-     git add -A
-     git status
-     git commit -m "Describe the change"
-     git push origin dev
-   git status must NOT list: config.local.ini, extreme_server.zip, .venv/,
-   build/, dist/, uploads/, *.bak
-
-   Check nothing private was ever committed (both must print nothing):
-     git ls-files | Select-String -Pattern '^config\.local\.ini$|extreme_server\.zip|^\.venv/|^build/|^dist/|^uploads/|\.bak$'
-     git log --all --name-only --pretty=format: | Select-String -Pattern '^config\.local\.ini$|extreme_server\.zip|^\.venv/|^build/|^dist/|^uploads/|\.bak$' | Sort-Object -Unique
-   Confirm they are ignored:
-     git check-ignore -v config.local.ini extreme_server.zip .venv build dist uploads
-   Check the last push:
-     git fetch origin
-     git log origin/dev --oneline -10
-     git show --stat --oneline origin/dev
-     git log origin/dev..dev --oneline      (prints nothing = all pushed)
-
-10. MAKE THE UPLOAD ZIP FOR GODADDY
-      .\make_server_zip.ps1
-    Creates extreme_server.zip with app, run.py, passenger_wsgi.py,
-    requirements.txt, config.ini. Never includes config.local.ini, .venv,
-    tests, build or dist. Stops if config.ini holds a password.
+6. MAKE THE UPLOAD ZIP (PowerShell, from the project folder)
+     Compress-Archive -Path app, run.py, passenger_wsgi.py, requirements.txt, config.ini -DestinationPath extreme_server.zip -Force
+   Leave out: .venv, build, dist, uploads, tests, .ps1 scripts.
 
 
 ==============================================================================
 PART C - PUT THE APP ON GODADDY
 ==============================================================================
-11. UPLOAD THE CODE
-    cPanel > Files > File Manager > home folder (NOT public_html)
-    > create folder: extreme_analytics_lab
-    > upload extreme_server.zip > right-click > Extract.
+7. UPLOAD THE CODE
+   cPanel > Files > File Manager > your home folder (NOT public_html)
+   > create folder: extreme_analytics_lab
+   > upload extreme_server.zip into it > right-click > Extract.
 
-12. CREATE THE PYTHON APP
-    cPanel > Software > Setup Python App > Create Application
-      Python version .............. newest offered (3.9 or higher)
-      Application root ............ extreme_analytics_lab
-      Application URL ............. your domain or subdomain
-      Application startup file .... passenger_wsgi.py
-      Application entry point ..... application
-    Click Create.
+8. CREATE THE PYTHON APP
+   cPanel > Software > Setup Python App > Create Application
+     Python version .............. newest offered (3.9 or higher)
+     Application root ............ extreme_analytics_lab
+     Application URL ............. your domain or subdomain
+     Application startup file .... passenger_wsgi.py
+     Application entry point ..... application
+   Click Create.
 
-13. ADD ENVIRONMENT VARIABLES (same screen)
-      APP_MODE ........ server
-      APP_DOMAIN ...... analytics.yourcompany.com
-      APP_PASSWORD .... a strong password (the shared sign-in password)
-      APP_SECRET_KEY .. a long random string (at least 16 characters)
-    For AI reports:
-      OPENAI_API_KEY .. your OpenAI key (never in config.ini)
-    Optional:
-      APP_UPLOAD_MAX_AGE_HOURS .. 24   (uploads deleted after this)
-      APP_SESSION_HOURS ......... 12   (how long a sign-in lasts)
-    Click Save. These never go into git.
-    Make a random secret key on your PC:
-      python -c "import secrets; print(secrets.token_hex(32))"
+9. ADD ENVIRONMENT VARIABLES (same screen, "Environment variables")
+     APP_MODE ........ server
+     APP_DOMAIN ...... analytics.yourcompany.com
+     APP_PASSWORD .... a strong password
+     APP_SECRET_KEY .. a long random string
+   Click Save. These never go into git.
 
-14. INSTALL THE PACKAGES
-    "Configuration files": add requirements.txt > Run Pip Install
-    (pandas and numpy take several minutes).
-    If it fails, use SSH: run the "source activate" command shown at the top
-    of the app screen, then:
+10. INSTALL THE PACKAGES
+    Under "Configuration files": add requirements.txt > Run Pip Install.
+    pandas and numpy take several minutes.
+    If it fails from the web page, use SSH: copy the "source activate"
+    command shown at the top of the app screen, run it, then:
       pip install -r requirements.txt
 
-15. START IT
+11. START IT
     Click Restart at the top of the app screen.
 
 
 ==============================================================================
-PART D - TEST ON GODADDY
+PART D - TEST
 ==============================================================================
-16. Open https://analytics.yourcompany.com
-    Expect: Sign in page (password only) and a padlock in the address bar.
-    Sign in, upload Jensen_Beach_AHU1_temperature.xlsx, run the analysis,
-    check chart, data listing (Day/Night), saves, Log out.
-    Health check (no sign-in needed): https://analytics.yourcompany.com/healthz
-    -> shows "ok".
+12. Open https://analytics.yourcompany.com
+    Expect: login page and a padlock in the address bar.
+    Log in, upload Jensen_Beach_AHU1_temperature.xlsx, run the analysis.
 
-17. If there is an error: open the log named on the Setup Python App screen
-    (usually stderr.log in the app folder) and send its contents for help.
-    "missing a password" in the log -> step 13 variables not saved.
+13. If there is an error: open the log file named on the Setup Python App
+    screen (usually stderr.log in the app folder) and send its contents
+    for help.
 
 
 ==============================================================================
 PART E - UPDATING LATER
 ==============================================================================
-18. On your PC:
-      .\test_all.ps1 -SkipExe
-      git add -A; git commit -m "..."; git push origin dev
-      .\make_server_zip.ps1
-    On GoDaddy:
-      upload and extract extreme_server.zip over the old files (step 11)
-      click Restart (step 15)
+14. Work locally as normal and commit to dev.
+    When a version is ready:
+      - make a new extreme_server.zip (step 6)
+      - upload and extract it over the old files (step 7)
+      - click Restart (step 11)
     Environment variables stay in place.
-
-19. Change the sign-in password: cPanel > Setup Python App > edit
-    APP_PASSWORD > Save > Restart. Everyone signs in with the new one.
-
-
-==============================================================================
-FILES THAT MAKE UP THE WEB DEPLOYMENT
-==============================================================================
-  passenger_wsgi.py          GoDaddy start file (always server mode)
-  app\server_settings.py     reads config.ini > config.local.ini > env vars
-  app\security.py            sign-in page, lockout after 5 wrong tries,
-                             secure cookies, Log out button, upload clean-up
-  config.local.ini.example   template for your private settings
-  config.local.ini           PRIVATE - never committed or uploaded
-  apply_web_deployment.py    one-time patch (step 5)
-  make_server_zip.ps1        builds extreme_server.zip (step 10)
-  test_all.ps1               runs every test (step 6)
-  tools\live_check.py        live checks used by test_all.ps1
-  tests\test_server_mode.py  unit tests for local/server mode
-  info_main\reference\       reference document for AI reports (in the server zip)
-  On the web the report is returned to the browser (Save As dialog); the
-  server never writes to a reports folder.
 
 
 ==============================================================================
@@ -247,16 +133,12 @@ CHECKLIST
 ==============================================================================
 [ ] Linux cPanel hosting with Setup Python App confirmed
 [ ] Address chosen: ______________________________
-[ ] Domain/subdomain attached, DNS pointing to hosting
+[ ] Domain/subdomain attached in cPanel, DNS pointing to hosting
 [ ] SSL (AutoSSL) active - padlock shows
 [ ] SSH access on (optional)
-[ ] Latest zip extracted, all six apply_*.py run
-[ ] .\test_all.ps1 -> ALL TESTS PASSED
-[ ] config.local.ini back to mode = local
-[ ] git status clean of private/generated files; pushed to dev
-[ ] .\make_server_zip.ps1 -> extreme_server.zip
-[ ] Uploaded and extracted outside public_html
-[ ] Python app created (passenger_wsgi.py / application)
+[ ] Deployment package added and tested locally
+[ ] extreme_server.zip uploaded and extracted outside public_html
+[ ] Python app created (startup file passenger_wsgi.py, entry point application)
 [ ] Environment variables set (APP_MODE, APP_DOMAIN, APP_PASSWORD, APP_SECRET_KEY)
-[ ] Pip install finished, app restarted
-[ ] /healthz shows ok; sign-in works; AHU file analyzed successfully
+[ ] Pip install finished
+[ ] App restarted, login works, AHU file analyzed successfully

@@ -38,4 +38,13 @@ Remove-Item -Recurse -Force $stage
 
 $size = [math]::Round((Get-Item $out).Length / 1KB)
 Write-Host "Created $out ($size KB)" -ForegroundColor Green
-Write-Host "Upload it to GoDaddy (web_deployment_steps.txt, step 7)." -ForegroundColor Cyan
+
+# Windows Server (GoDaddy VPS with Plesk): a folder with everything to copy to the server
+$pkg = "deploy_package"
+if (Test-Path $pkg) { Remove-Item -Recurse -Force $pkg }
+New-Item -ItemType Directory $pkg | Out-Null
+Copy-Item $out $pkg
+if (Test-Path "deploy_windows_server.ps1") { Copy-Item "deploy_windows_server.ps1" $pkg }
+Write-Host "Created $pkg\ with extreme_server.zip + deploy_windows_server.ps1" -ForegroundColor Green
+Write-Host "Copy the deploy_package folder to the server (Remote Desktop) and run there, as administrator:" -ForegroundColor Cyan
+Write-Host "  .\deploy_windows_server.ps1 -Domain your.domain.com" -ForegroundColor Cyan

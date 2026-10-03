@@ -64,7 +64,7 @@ def _read_ini() -> configparser.ConfigParser:
     parser = configparser.ConfigParser(inline_comment_prefixes=(";", "#"), interpolation=None)
     shared, local = ini_paths()
     files = [str(p) for p in (shared, local) if p is not None and p.exists()]
-    parser.read(files, encoding="utf-8")
+    parser.read(files, encoding="utf-8-sig")  # tolerate a BOM (Windows PowerShell 5.1)
     return parser
 
 

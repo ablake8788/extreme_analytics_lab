@@ -33,9 +33,9 @@ def server_client(monkeypatch, password="s3cret-pass"):
 
 
 def login(client, password):
-    client.get("/login")
-    with client.session_transaction() as s:
-        token = s["tal_csrf"]
+    import re
+    page = client.get("/login").data.decode()
+    token = re.search(r'name="csrf" value="([^"]+)"', page).group(1)
     return client.post("/login", data={"password": password, "csrf": token, "next": "/"})
 
 
@@ -61,7 +61,9 @@ def test_wrong_then_right_password(monkeypatch):
     r = login(c, "wrong")
     assert r.status_code == 401 and b"not correct" in r.data
     r = login(c, "s3cret-pass")
-    assert r.status_code == 302
+    assert r.status_code == 302 and "/login/check" in r.headers["Location"]
+    r = c.get(r.headers["Location"])
+    assert r.status_code == 302 and r.headers["Location"].endswith("/")
     page = c.get("/")
     assert page.status_code == 200 and b"tal-logout" in page.data
     assert c.post("/logout").status_code == 302
@@ -102,3 +104,22 @@ def test_passenger_wsgi_starts_in_server_mode(monkeypatch):
     mod = importlib.import_module("passenger_wsgi")
     assert mod.application.config["APP_MODE"] == "server"
     os.environ.pop("APP_MODE", None)
+
+
+def test_form_works_without_cookie_and_reports_lost_cookie(monkeypatch):
+    import re
+    c = server_client(monkeypatch)
+    page = c.get("/login").data.decode()
+    token = re.search(r'name="csrf" value="([^"]+)"', page).group(1)
+    c.delete_cookie("tal_session")                     # browser lost the cookie
+    r = c.post("/login", data={"password": "s3cret-pass", "csrf": token, "next": "/"})
+    assert r.status_code == 302                       # the form is still accepted
+    c.delete_cookie("tal_session")                     # and the sign-in cookie is lost too
+    r = c.get(r.headers["Location"])
+    assert r.status_code == 401 and b"did not keep the sign-in" in r.data and b"Diagnostics" in r.data
+
+
+def test_tampered_form_token_rejected(monkeypatch):
+    c = server_client(monkeypatch)
+    r = c.post("/login", data={"password": "s3cret-pass", "csrf": "forged", "next": "/"})
+    assert r.status_code == 401 and b"not valid" in r.data

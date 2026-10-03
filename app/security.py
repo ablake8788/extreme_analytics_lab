@@ -19,13 +19,15 @@ from datetime import timedelta
 from html import escape
 from pathlib import Path
 
-from flask import Response, jsonify, redirect, request, session
+from flask import Response, current_app, jsonify, redirect, request, session
+from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.security import check_password_hash
 
 from .server_settings import ServerSettings, load_settings
 
-OPEN_PATHS = {"/login", "/logout", "/healthz"}
+OPEN_PATHS = {"/login", "/login/check", "/logout", "/healthz"}
+FORM_MAX_AGE = 2 * 3600  # a sign-in form stays valid for 2 hours
 _failures: dict[str, list[float]] = {}
 _last_cleanup = [0.0]
 
@@ -49,6 +51,7 @@ def init_security(app):
     app.extensions["tal_settings"] = settings
 
     app.add_url_rule("/login", "tal_login", _login_view, methods=["GET", "POST"])
+    app.add_url_rule("/login/check", "tal_login_check", _login_check_view)
     app.add_url_rule("/logout", "tal_logout", _logout_view, methods=["GET", "POST"])
     app.add_url_rule("/healthz", "tal_health", lambda: ("ok", 200, {"Content-Type": "text/plain"}))
     app.before_request(_guard)
@@ -58,8 +61,11 @@ def init_security(app):
 
 # ------------------------------------------------------------------ guard
 def _settings() -> ServerSettings:
-    from flask import current_app
     return current_app.extensions["tal_settings"]
+
+
+def _form_signer() -> URLSafeTimedSerializer:
+    return URLSafeTimedSerializer(current_app.secret_key, salt="tal-login-form")
 
 
 def _guard():
@@ -126,31 +132,57 @@ def _password_ok(given: str) -> bool:
     return hmac.compare_digest(given.encode("utf-8"), s.password.encode("utf-8"))
 
 
+def _render_login(nxt: str, error: str = "", status: int = 200, detail: str = "") -> Response:
+    # The form carries its own signed, time-limited token, so it does not
+    # depend on a cookie surviving between showing and submitting the form.
+    token = _form_signer().dumps(secrets.token_hex(8))
+    extra = f'<p class="err" role="alert">{escape(error)}</p>' if error else ""
+    if detail:
+        extra += f'<p class="detail">{escape(detail)}</p>'
+    html = _LOGIN_HTML.replace("{{csrf}}", token).replace("{{next}}", escape(nxt)).replace("{{error}}", extra)
+    return Response(html, status=status, mimetype="text/html")
+
+
 def _login_view():
     nxt = _safe_next(request.values.get("next", "/"))
     if session.get("tal_auth"):
         return redirect(nxt)
-    error = ""
-    if request.method == "POST":
-        wait = _locked_for()
-        if wait:
-            error = f"Too many attempts. Try again in {max(1, round(wait / 60))} minute(s)."
-        elif not hmac.compare_digest(request.form.get("csrf", ""), session.get("tal_csrf", "")):
-            error = "The form expired. Please try again."
-        elif _password_ok(request.form.get("password", "")):
-            session.clear()
-            session.permanent = True
-            session["tal_auth"] = True
-            _failures.pop(_client(), None)
-            return redirect(nxt)
-        else:
-            _failures.setdefault(_client(), []).append(time.time())
-            time.sleep(0.4)
-            error = "That password is not correct."
-    session["tal_csrf"] = secrets.token_urlsafe(24)
-    html = _LOGIN_HTML.replace("{{csrf}}", session["tal_csrf"]).replace("{{next}}", escape(nxt)).replace(
-        "{{error}}", f'<p class="err" role="alert">{escape(error)}</p>' if error else "")
-    return Response(html, status=401 if error else 200, mimetype="text/html")
+    if request.method != "POST":
+        return _render_login(nxt)
+    wait = _locked_for()
+    if wait:
+        return _render_login(nxt, f"Too many attempts. Try again in {max(1, round(wait / 60))} minute(s).", 401)
+    try:
+        _form_signer().loads(request.form.get("csrf", ""), max_age=FORM_MAX_AGE)
+    except SignatureExpired:
+        return _render_login(nxt, "The form expired. Please try again.", 401)
+    except BadSignature:
+        return _render_login(nxt, "The form was not valid. Please try again.", 401)
+    if _password_ok(request.form.get("password", "")):
+        session.clear()
+        session.permanent = True
+        session["tal_auth"] = True
+        _failures.pop(_client(), None)
+        # Confirm the browser really kept the sign-in before going on.
+        return redirect("/login/check?next=" + nxt)
+    _failures.setdefault(_client(), []).append(time.time())
+    time.sleep(0.4)
+    return _render_login(nxt, "That password is not correct.", 401)
+
+
+def _login_check_view():
+    nxt = _safe_next(request.args.get("next", "/"))
+    if session.get("tal_auth"):
+        return redirect(nxt)
+    # Password was right, but the browser did not send the sign-in cookie back.
+    s = _settings()
+    detail = (f"Diagnostics: address={request.host_url} scheme={request.scheme} "
+              f"secure_cookies={s.secure_cookies} forwarded_proto={request.headers.get('X-Forwarded-Proto', '-')} "
+              f"cookie_received={'yes' if request.cookies else 'no'}")
+    msg = ("Your password was accepted, but your browser did not keep the sign-in. "
+           "Open the site at https://" + (s.domain or request.host) + " (with the padlock), "
+           "allow cookies for it, and try again.")
+    return _render_login(nxt, msg, 401, detail)
 
 
 def _logout_view():
@@ -210,6 +242,7 @@ _LOGIN_HTML = """<!doctype html>
            font:600 15px "Segoe UI",Arial,sans-serif; cursor:pointer; }
   button:hover { background:#2159c9; }
   .err { margin:0 0 14px; padding:9px 12px; border-radius:6px; background:#fde5e3; color:#a1261c; font-size:13.5px; }
+  .detail { margin:-6px 0 14px; font:11.5px Consolas,monospace; color:#5d6975; word-break:break-all; }
 </style></head>
 <body>
 <header><div><div class="mark" aria-hidden="true">Ti</div><div><small>Titanium Analytics</small><strong>Extreme &amp; Change Analytics Lab</strong></div></div></header>

@@ -183,7 +183,12 @@ def server_mode(data_file):
         m = re.search(rb'name="csrf" value="([^"]+)"', body)
         csrf = m.group(1).decode() if m else csrf
         st, h, _ = c.post_form("/login", {"password": password, "csrf": csrf, "next": "/"})
-        check("right password signs in", st == 302, f"HTTP {st}")
+        ok = st == 302
+        if ok and "/login/check" in h.get("Location", ""):
+            loc = h.get("Location"); loc = loc[loc.index("/login/check"):]
+            st, h, _ = c.get(loc)
+            ok = st == 302
+        check("right password signs in", ok, f"HTTP {st}")
         st, _, body = c.get("/")
         check("app page opens with Log out button", st == 200 and b"tal-logout" in body, f"HTTP {st}")
         analyze_flow(c, data_file, "server")
