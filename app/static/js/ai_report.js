@@ -160,13 +160,15 @@
     }
   }
 
+  let lastReport = null;  // {token, filename, size, saved_to, source, note, can_open}
+
   async function generate() {
     const source = $('[data-ar=source]').value;
     const loc = $('[data-ar=location]').value.trim() || 'Sensor';
     const units = $('[data-ar=units]').value.trim();
     try { localStorage.setItem(LS_KEY, loc); } catch (e) { /* ignore */ }
 
-    let csvBlob, csvName, first, last;
+    let csvBlob, csvName;
     if (source === 'file') {
       if (!savedCsvFile) { status('Choose a results CSV file first.', 'error'); return; }
       csvBlob = savedCsvFile; csvName = savedCsvFile.name;
@@ -175,44 +177,83 @@
       if (!list || !list.length) { status('Run an analysis first.', 'error'); return; }
       csvBlob = new Blob([rowsToCsv(list)], { type: 'text/csv' });
       csvName = `results_${safe(loc)}.csv`;
-      first = list[0].Timestamp; last = list[list.length - 1].Timestamp;
     }
-    const suggested = first ? `${safe(loc)}_Results_Analysis_${ymd(first)}-${ymd(last)}.docx` : `${safe(loc)}_Results_Analysis.docx`;
 
     busy(true);
-    status('Choose where to save the report...');
+    lastReport = null;
+    $('[data-ar=ready]').style.display = 'none';
+    status('Generating the report: computing facts, reading the reference document, asking OpenAI. This can take up to a minute...');
     try {
-      const r = await saveAs(suggested, 'docx', async () => {
-        status('Generating the report: computing facts, reading the reference document, asking OpenAI. This can take up to a minute...');
-        const fd = new FormData();
-        fd.append('file', csvBlob, csvName);
-        fd.append('location', loc);
-        fd.append('units', units);
-        const res = await fetch('/api/ai-report', { method: 'POST', body: fd });
-        if (!res.ok) {
-          let msg = `HTTP ${res.status}`;
-          try { msg = (await res.json()).error || msg; } catch (e) { /* not JSON */ }
-          throw new Error(msg);
-        }
-        const h = (k) => decodeURIComponent(res.headers.get(k) || '');
-        return { blob: await res.blob(), name: h('X-Report-Filename') || suggested,
-                 savedTo: h('X-Report-Saved-To'), source: h('X-AI-Source'), note: h('X-AI-Note') };
-      });
-      if (!r) { status('Cancelled.'); return; }
-      const x = r.extra || {};
-      const kb = Math.max(1, Math.round(r.size / 1024)).toLocaleString();
-      const parts = [`Report saved as <b>${esc(r.name)}</b> (${kb} KB)${r.dialog ? '' : ' in your Downloads folder'}.`];
-      if (r.warning) parts.push(esc(r.warning));
-      if (x.savedTo) parts.push(`Copy in the reports folder: <code>${esc(x.savedTo)}</code>`);
-      parts.push(x.source === 'openai' ? 'Wording by OpenAI, numbers computed by the app.' : 'Plain wording (AI not used).');
-      if (x.note) parts.push(esc(x.note));
-      status(parts.join('<br>'), x.source === 'openai' ? 'ok' : undefined);
+      const fd = new FormData();
+      fd.append('file', csvBlob, csvName);
+      fd.append('location', loc);
+      fd.append('units', units);
+      const res = await fetch('/api/ai-report', { method: 'POST', body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+      lastReport = data;
+      showReady();
+      if (data.can_open) await openReport(true);   // PC / .exe: open in Word right away
     } catch (e) {
       console.error('AI report failed:', e);
-      status(`Report not created: ${esc(e.message || e)}<br>No empty file was left behind.`, 'error');
+      status(`Report not created: ${esc(e.message || e)}`, 'error');
     } finally {
       busy(false);
       updateSource();
+    }
+  }
+
+  function showReady() {
+    const r = lastReport;
+    const kb = Math.max(1, Math.round(r.size / 1024)).toLocaleString();
+    $('[data-ar=readyname]').textContent = `${r.filename} (${kb} KB)`;
+    $('[data-ar=open]').textContent = r.can_open ? 'Open in Word' : 'Open (download)';
+    $('[data-ar=ready]').style.display = 'flex';
+    const parts = ['Report ready. ' + (r.can_open ? 'Opening it in Word...' : 'Click Open to view it.') +
+                   ' Then click <b>Save as...</b> to choose where to save it.'];
+    if (r.saved_to) parts.push(`Copy in the reports folder: <code>${esc(r.saved_to)}</code>`);
+    parts.push(r.source === 'openai' ? 'Wording by OpenAI, numbers computed by the app.' : 'Plain wording (AI not used).');
+    if (r.note) parts.push(esc(r.note));
+    status(parts.join('<br>'), r.source === 'openai' ? 'ok' : undefined);
+  }
+
+  async function fetchReportBlob() {
+    const res = await fetch(`/api/ai-report/file/${lastReport.token}`);
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try { msg = (await res.json()).error || msg; } catch (e) { /* not JSON */ }
+      throw new Error(msg);
+    }
+    return res.blob();
+  }
+
+  async function openReport(auto) {
+    if (!lastReport) return;
+    try {
+      if (lastReport.can_open) {
+        const res = await fetch(`/api/ai-report/open/${lastReport.token}`, { method: 'POST' });
+        const d = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
+        if (!auto) status(`Opened <b>${esc(lastReport.filename)}</b> in Word. Click <b>Save as...</b> to choose where to save it.`, 'ok');
+      } else {
+        download(await fetchReportBlob(), lastReport.filename);
+        status(`Downloaded <b>${esc(lastReport.filename)}</b> - open it from your Downloads. Click <b>Save as...</b> to save it somewhere else.`, 'ok');
+      }
+    } catch (e) {
+      status(`Could not open the report: ${esc(e.message || e)}`, 'error');
+    }
+  }
+
+  async function saveReportAs() {
+    if (!lastReport) return;
+    try {
+      const r = await saveAs(lastReport.filename, 'docx', async () => ({ blob: await fetchReportBlob(), name: lastReport.filename }));
+      if (!r) { status('Save cancelled. The report is still ready - click Save as... again any time.'); return; }
+      const kb = Math.max(1, Math.round(r.size / 1024)).toLocaleString();
+      status(`Saved <b>${esc(r.name)}</b> (${kb} KB)${r.dialog ? '' : ' in your Downloads folder'}.` +
+             (r.warning ? `<br>${esc(r.warning)}` : ''), r.warning ? undefined : 'ok');
+    } catch (e) {
+      status(`Report not saved: ${esc(e.message || e)}`, 'error');
     }
   }
 
@@ -239,7 +280,12 @@
       </div>
       <div class="row ar-buttons" style="margin-top:14px;gap:10px">
         <button type="button" data-ar="savecsv" class="ar-secondary">Save results CSV...</button>
-        <button type="button" data-ar="generate">Generate AI report (Word)...</button>
+        <button type="button" data-ar="generate">Generate AI report (Word)</button>
+      </div>
+      <div class="ar-ready" data-ar="ready" style="display:none">
+        <span class="ar-ready-name" data-ar="readyname"></span>
+        <button type="button" data-ar="open" class="ar-secondary">Open in Word</button>
+        <button type="button" data-ar="saveas">Save as...</button>
       </div>
       <p class="muted" data-ar="cfg" style="margin:12px 0 0"></p>
       <p data-ar="msg" role="status" style="margin:8px 0 0;font-size:13.5px;line-height:1.5"></p>`;
@@ -253,6 +299,9 @@
       .ar-panel .ar-controls input, .ar-panel .ar-controls select { width:100%; }
       .ar-panel button.ar-secondary { background:#fff; color:#1f2a33; border:1px solid #d5dbe1; }
       .ar-panel button.ar-secondary:hover { background:#e8f0fe; }
+      .ar-panel .ar-ready { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin-top:12px; padding:10px 12px;
+                            background:#f3f7ff; border:1px solid #c9d8f6; border-radius:6px; }
+      .ar-panel .ar-ready-name { font-weight:600; margin-right:auto; }
       .ar-panel code { font-size:12px; background:#f3f5f7; padding:1px 5px; border-radius:4px; }
       @media (max-width: 760px) { .ar-panel .ar-controls { grid-template-columns: 1fr; } }`;
     document.head.appendChild(st);
@@ -269,6 +318,8 @@
     };
     $('[data-ar=savecsv]').onclick = saveCsv;
     $('[data-ar=generate]').onclick = generate;
+    $('[data-ar=open]').onclick = () => openReport(false);
+    $('[data-ar=saveas]').onclick = saveReportAs;
     updateSource();
     loadStatus();
   }

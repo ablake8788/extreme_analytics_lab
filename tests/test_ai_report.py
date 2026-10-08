@@ -163,20 +163,51 @@ def test_word_report_builds(csv_text):
     assert len(doc.inline_shapes) == 2
 
 
-def test_endpoint_returns_docx_and_saves_copy(monkeypatch, tmp_path, csv_text):
+def test_endpoint_generate_open_and_save(monkeypatch, tmp_path, csv_text):
     from app import create_app
+    import os as _os
     out = tmp_path / "results"
     monkeypatch.setenv("APP_REPORTS_FOLDER", str(out))
     client = create_app().test_client()
     st = client.get("/api/ai-report/status").get_json()
-    assert st["ai_configured"] is False and st["saves_copy"] is True
+    assert st["ai_configured"] is False and st["saves_copy"] is True and st["mode"] == "local"
+    # 1. generate: JSON with a token, copy in the reports folder
     r = client.post("/api/ai-report", data={"file": (io.BytesIO(csv_text.encode()), "res.csv"),
                                             "location": "Test Building, AHU 1", "units": "°F"},
                     content_type="multipart/form-data")
+    assert r.status_code == 200
+    d = r.get_json()
+    assert d["filename"].startswith("Test_Building_AHU_1_Results_Analysis_20250801-")
+    assert (out / d["filename"]).exists() and d["source"] == "built-in" and len(d["token"]) == 32
+    # 2. open in Word (PC): calls os.startfile on the kept file
+    opened = []
+    monkeypatch.setattr(_os, "startfile", lambda p: opened.append(p), raising=False)
+    r = client.post(f"/api/ai-report/open/{d['token']}")
+    assert r.status_code == 200 and opened and opened[0].endswith(d["filename"])
+    # 3. save as: the browser fetches the file
+    r = client.get(f"/api/ai-report/file/{d['token']}")
     assert r.status_code == 200 and r.data[:2] == b"PK"
-    name = r.headers["X-Report-Filename"]
-    assert name.startswith("Test_Building_AHU_1_Results_Analysis_20250801-")
-    assert (out / name).exists() and r.headers["X-AI-Source"] == "built-in"
+    # unknown / malformed tokens are refused
+    assert client.get("/api/ai-report/file/" + "0" * 32).status_code == 404
+    assert client.get("/api/ai-report/file/../../etc").status_code == 404
+
+
+def test_open_not_available_in_server_mode(monkeypatch, tmp_path, csv_text):
+    from app import create_app
+    import re as _re
+    monkeypatch.setenv("APP_MODE", "server")
+    monkeypatch.setenv("APP_PASSWORD", "pw")
+    monkeypatch.setenv("APP_SECRET_KEY", "k" * 32)
+    c = create_app().test_client()
+    page = c.get("/login").data.decode()
+    tok = _re.search(r'name="csrf" value="([^"]+)"', page).group(1)
+    c.post("/login", data={"password": "pw", "csrf": tok, "next": "/"})
+    c.get("/login/check?next=/")
+    d = c.post("/api/ai-report", data={"file": (io.BytesIO(csv_text.encode()), "res.csv"), "location": "X"},
+               content_type="multipart/form-data").get_json()
+    assert d["can_open"] is False
+    assert c.post(f"/api/ai-report/open/{d['token']}").status_code == 400
+    assert c.get(f"/api/ai-report/file/{d['token']}").data[:2] == b"PK"
 
 
 def test_endpoint_rejects_bad_csv():

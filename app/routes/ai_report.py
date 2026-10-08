@@ -12,7 +12,10 @@ Response headers tell the page what happened:
 from __future__ import annotations
 
 import io
+import os
 import re
+import secrets
+import time
 from pathlib import Path
 from urllib.parse import quote
 
@@ -26,6 +29,29 @@ from app.services.results_facts import FactsError, compute_facts, prepare
 
 ai_report_bp = Blueprint("ai_report", __name__, url_prefix="/api/ai-report")
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+KEEP_HOURS = 24  # generated reports are kept this long for Open / Save as
+_TOKEN = re.compile(r"^[0-9a-f]{32}$")
+
+
+def _report_dir() -> Path:
+    from app.config import Config
+    d = Path(Config.UPLOAD_DIR) / "reports"
+    d.mkdir(parents=True, exist_ok=True)
+    now = time.time()
+    for f in d.glob("*.docx"):  # tidy up old ones
+        try:
+            if now - f.stat().st_mtime > KEEP_HOURS * 3600:
+                f.unlink()
+        except OSError:
+            pass
+    return d
+
+
+def _report_path(token: str):
+    if not _TOKEN.match(token or ""):
+        return None
+    hits = list(_report_dir().glob(token + "__*.docx"))
+    return hits[0] if hits else None
 
 
 def _mode() -> str:
@@ -59,7 +85,10 @@ def report_filename(location: str, facts: dict) -> str:
 @ai_report_bp.get("/status")
 def status():
     s = load_ai_settings()
-    return jsonify(s.public_status(_mode()))
+    st = s.public_status(_mode())
+    st["mode"] = _mode()
+    st["can_open"] = _mode() == "local" and hasattr(os, "startfile")
+    return jsonify(st)
 
 
 @ai_report_bp.post("")
@@ -95,11 +124,33 @@ def make_report():
         except OSError as exc:
             saved = f"(not saved: {exc.strerror or exc})"
 
-    resp = send_file(io.BytesIO(data), mimetype=DOCX_MIME, as_attachment=True, download_name=name)
-    resp.headers["X-Report-Filename"] = quote(name)
-    resp.headers["X-Report-Saved-To"] = quote(saved)
-    resp.headers["X-AI-Source"] = text.source
-    resp.headers["X-AI-Note"] = quote(text.note or (f"{len(text.removed_sentences)} unverified sentence(s) removed"
-                                                    if text.removed_sentences else ""))
-    resp.headers["Access-Control-Expose-Headers"] = "X-Report-Filename, X-Report-Saved-To, X-AI-Source, X-AI-Note"
-    return resp
+    token = secrets.token_hex(16)
+    (_report_dir() / f"{token}__{name}").write_bytes(data)
+    note = text.note or (f"{len(text.removed_sentences)} unverified sentence(s) removed" if text.removed_sentences else "")
+    return jsonify({"token": token, "filename": name, "size": len(data), "saved_to": saved,
+                    "source": text.source, "note": note,
+                    "can_open": _mode() == "local" and hasattr(os, "startfile")})
+
+
+@ai_report_bp.get("/file/<token>")
+def report_file(token):
+    path = _report_path(token)
+    if not path:
+        return jsonify({"error": "This report is no longer available. Generate it again."}), 404
+    name = path.name.split("__", 1)[1]
+    return send_file(str(path), mimetype=DOCX_MIME, as_attachment=True, download_name=name)
+
+
+@ai_report_bp.post("/open/<token>")
+def report_open(token):
+    """Open the report in Word on this computer (PC / .exe only)."""
+    if _mode() != "local" or not hasattr(os, "startfile"):
+        return jsonify({"error": "Open in Word works in the PC version. Use Save as... here."}), 400
+    path = _report_path(token)
+    if not path:
+        return jsonify({"error": "This report is no longer available. Generate it again."}), 404
+    try:
+        os.startfile(str(path))  # noqa: S606 - opens the default app (Word)
+    except OSError as exc:
+        return jsonify({"error": f"Could not open Word: {exc.strerror or exc}"}), 500
+    return jsonify({"opened": True})
