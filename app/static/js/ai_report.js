@@ -1,12 +1,14 @@
 /*
  * ai_report.js - "AI report" panel for the Extreme & Change Analytics Lab.
  *
- *   Save results CSV...          Save As dialog, you choose folder and name
- *   Generate AI report (Word)... Save As dialog first, then the app computes
- *                                the facts, reads the reference document,
- *                                asks OpenAI for the wording and writes the
- *                                .docx where you chose (plus a copy in the
- *                                reports folder from the ini, local mode)
+ *   Save results CSV...            Save As dialog, you choose folder and name
+ *   Generate AI report (Word)      the app computes the facts, reads the reference
+ *   Generate AI report (Excel)     document and asks OpenAI for the wording, then
+ *   Generate both                  builds the .docx and/or the .xlsx workbook
+ *
+ *   For each report:  Open (Word / Excel, PC version) - Save as... - Download -
+ *                     Save copy to reports folder (PC version)
+ *   Open reports folder (PC version)
  *
  * Save As dialogs use the browser's File System Access API (Edge / Chrome).
  * Other browsers fall back to a normal download.
@@ -41,7 +43,7 @@
     const col = sel && sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex].text.replace(/\s*\[[^\]]*\]\s*/, '') : '';
     return [file, col].filter(Boolean).join(', ') || 'Sensor';
   }
-  const safe = (s) => String(s || 'Sensor').replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60) || 'Sensor';
+  const safe = (s) => String(s || 'Sensor').replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 24).replace(/_+$/, '') || 'Sensor';   // short names: Windows paths max 260 characters
   const ymd = (t) => String(t || '').slice(0, 10).replace(/-/g, '');
 
   function rowsToCsv(list) {
@@ -84,7 +86,9 @@
   async function saveAs(suggestedName, kind, makeBlob) {
     const types = kind === 'docx'
       ? [{ description: 'Word document', accept: { 'application/vnd.openxmlformats-officedocument.wordprocessingml.document': ['.docx'] } }]
-      : [{ description: 'CSV file', accept: { 'text/csv': ['.csv'] } }];
+      : kind === 'xlsx'
+        ? [{ description: 'Excel workbook', accept: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'] } }]
+        : [{ description: 'CSV file', accept: { 'text/csv': ['.csv'] } }];
     let handle = null;
     if (canPick) {
       try {
@@ -147,7 +151,7 @@
     const list = chosenRows();
     if (!list || !list.length) { status('Run an analysis first.', 'error'); return; }
     const loc = $('[data-ar=location]').value.trim();
-    const name = `extreme_results_${safe(loc)}_${ymd(list[0].Timestamp)}-${ymd(list[list.length - 1].Timestamp)}.csv`;
+    const name = `results_${safe(loc)}_${ymd(list[0].Timestamp)}-${ymd(list[list.length - 1].Timestamp)}.csv`;
     try {
       const r = await saveAs(name, 'csv', async () => new Blob([rowsToCsv(list)], { type: 'text/csv;charset=utf-8' }));
       if (r) {
@@ -160,9 +164,10 @@
     }
   }
 
-  let lastReport = null;  // {token, filename, size, saved_to, source, note, can_open}
+  let lastBatch = null;  // {reports:[{token, filename, size, saved_to, kind}], source, note, can_open, folder}
+  const APP = { docx: 'Word', xlsx: 'Excel' };
 
-  async function generate() {
+  async function generate(format) {
     const source = $('[data-ar=source]').value;
     const loc = $('[data-ar=location]').value.trim() || 'Sensor';
     const units = $('[data-ar=units]').value.trim();
@@ -180,20 +185,28 @@
     }
 
     busy(true);
-    lastReport = null;
+    lastBatch = null;
+    $('[data-ar=ready]').innerHTML = '';
     $('[data-ar=ready]').style.display = 'none';
-    status('Generating the report: computing facts, reading the reference document, asking OpenAI. This can take up to a minute...');
+    const what = format === 'both' ? 'Word and Excel reports' : `${APP[format]} report`;
+    status(`Generating the ${what}: computing facts, reading the reference document, asking OpenAI` +
+           (format !== 'docx' ? ', drawing the charts' : '') + '. This can take up to a minute...');
     try {
       const fd = new FormData();
       fd.append('file', csvBlob, csvName);
       fd.append('location', loc);
       fd.append('units', units);
+      fd.append('format', format);
+      fd.append('include_data', $('[data-ar=incdata]').checked ? '1' : '0');
       const res = await fetch('/api/ai-report', { method: 'POST', body: fd });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-      lastReport = data;
+      if (!data.reports) data.reports = [{ token: data.token, filename: data.filename, size: data.size, saved_to: data.saved_to, kind: 'docx' }];
+      lastBatch = data;
       showReady();
-      if (data.can_open) await openReport(true);   // PC / .exe: open in Word right away
+      if (data.can_open && $('[data-ar=autoopen]').checked) {
+        for (const r of data.reports) await openReport(r, true);   // PC / .exe: open in Word / Excel right away
+      }
     } catch (e) {
       console.error('AI report failed:', e);
       status(`Report not created: ${esc(e.message || e)}`, 'error');
@@ -204,21 +217,49 @@
   }
 
   function showReady() {
-    const r = lastReport;
-    const kb = Math.max(1, Math.round(r.size / 1024)).toLocaleString();
-    $('[data-ar=readyname]').textContent = `${r.filename} (${kb} KB)`;
-    $('[data-ar=open]').textContent = r.can_open ? 'Open in Word' : 'Open (download)';
-    $('[data-ar=ready]').style.display = 'flex';
-    const parts = ['Report ready. ' + (r.can_open ? 'Opening it in Word...' : 'Click Open to view it.') +
-                   ' Then click <b>Save as...</b> to choose where to save it.'];
-    if (r.saved_to) parts.push(`Copy in the reports folder: <code>${esc(r.saved_to)}</code>`);
-    parts.push(r.source === 'openai' ? 'Wording by OpenAI, numbers computed by the app.' : 'Plain wording (AI not used).');
-    if (r.note) parts.push(esc(r.note));
-    status(parts.join('<br>'), r.source === 'openai' ? 'ok' : undefined);
+    const b = lastBatch;
+    const box = $('[data-ar=ready]');
+    box.innerHTML = '';
+    b.reports.forEach((r) => {
+      const kb = Math.max(1, Math.round(r.size / 1024)).toLocaleString();
+      const row = document.createElement('div');
+      row.className = 'ar-ready-row';
+      row.innerHTML = `
+        <span class="ar-kind ar-kind-${r.kind}">${r.kind === 'xlsx' ? 'XLSX' : 'DOCX'}</span>
+        <span class="ar-ready-name">${esc(r.filename)} <span class="muted">(${kb} KB)</span></span>
+        <button type="button" class="ar-secondary" data-act="open">${b.can_open ? `Open in ${APP[r.kind]}` : 'Open (download)'}</button>
+        <button type="button" data-act="saveas">Save as...</button>
+        <button type="button" class="ar-secondary" data-act="download">Download</button>
+        ${b.can_open && b.folder ? '<button type="button" class="ar-secondary" data-act="copy">Save copy to reports folder</button>' : ''}`;
+      row.querySelector('[data-act=open]').onclick = () => openReport(r, false);
+      row.querySelector('[data-act=saveas]').onclick = () => saveReportAs(r);
+      row.querySelector('[data-act=download]').onclick = () => downloadReport(r);
+      const cp = row.querySelector('[data-act=copy]');
+      if (cp) cp.onclick = () => copyToFolder(r);
+      box.appendChild(row);
+    });
+    if (b.can_open && b.folder) {
+      const foot = document.createElement('div');
+      foot.className = 'ar-ready-foot';
+      foot.innerHTML = `<span class="muted">Reports folder: <code>${esc(b.folder)}</code></span>
+        <button type="button" class="ar-secondary" data-act="folder">Open reports folder</button>`;
+      foot.querySelector('[data-act=folder]').onclick = openFolder;
+      box.appendChild(foot);
+    }
+    box.style.display = 'block';
+    const n = b.reports.length;
+    const parts = [`${n === 1 ? 'Report' : 'Reports'} ready. ` +
+                   (b.can_open && $('[data-ar=autoopen]').checked ? `Opening ${n === 1 ? 'it' : 'them'}...` : 'Click Open to view.') +
+                   ' Use <b>Save as...</b> to choose the folder and name, or <b>Download</b> to save to your Downloads.'];
+    const saved = b.reports.filter((r) => r.saved_to).map((r) => `<code>${esc(r.saved_to)}</code>`);
+    if (saved.length) parts.push(`Copy in the reports folder: ${saved.join(', ')}`);
+    parts.push(b.source === 'openai' ? 'Wording by OpenAI, numbers computed by the app.' : 'Plain wording (AI not used).');
+    if (b.note) parts.push(esc(b.note));
+    status(parts.join('<br>'), b.source === 'openai' ? 'ok' : undefined);
   }
 
-  async function fetchReportBlob() {
-    const res = await fetch(`/api/ai-report/file/${lastReport.token}`);
+  async function fetchReportBlob(r) {
+    const res = await fetch(`/api/ai-report/file/${r.token}`);
     if (!res.ok) {
       let msg = `HTTP ${res.status}`;
       try { msg = (await res.json()).error || msg; } catch (e) { /* not JSON */ }
@@ -227,33 +268,61 @@
     return res.blob();
   }
 
-  async function openReport(auto) {
-    if (!lastReport) return;
+  async function openReport(r, auto) {
     try {
-      if (lastReport.can_open) {
-        const res = await fetch(`/api/ai-report/open/${lastReport.token}`, { method: 'POST' });
+      if (lastBatch && lastBatch.can_open) {
+        const res = await fetch(`/api/ai-report/open/${r.token}`, { method: 'POST' });
         const d = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
-        if (!auto) status(`Opened <b>${esc(lastReport.filename)}</b> in Word. Click <b>Save as...</b> to choose where to save it.`, 'ok');
+        if (!auto) status(`Opened <b>${esc(r.filename)}</b> in ${APP[r.kind]}. Click <b>Save as...</b> to choose where to save it.`, 'ok');
       } else {
-        download(await fetchReportBlob(), lastReport.filename);
-        status(`Downloaded <b>${esc(lastReport.filename)}</b> - open it from your Downloads. Click <b>Save as...</b> to save it somewhere else.`, 'ok');
+        download(await fetchReportBlob(r), r.filename);
+        status(`Downloaded <b>${esc(r.filename)}</b> - open it from your Downloads. Click <b>Save as...</b> to save it somewhere else.`, 'ok');
       }
     } catch (e) {
       status(`Could not open the report: ${esc(e.message || e)}`, 'error');
     }
   }
 
-  async function saveReportAs() {
-    if (!lastReport) return;
+  async function saveReportAs(r) {
     try {
-      const r = await saveAs(lastReport.filename, 'docx', async () => ({ blob: await fetchReportBlob(), name: lastReport.filename }));
-      if (!r) { status('Save cancelled. The report is still ready - click Save as... again any time.'); return; }
-      const kb = Math.max(1, Math.round(r.size / 1024)).toLocaleString();
-      status(`Saved <b>${esc(r.name)}</b> (${kb} KB)${r.dialog ? '' : ' in your Downloads folder'}.` +
-             (r.warning ? `<br>${esc(r.warning)}` : ''), r.warning ? undefined : 'ok');
+      const res = await saveAs(r.filename, r.kind, async () => ({ blob: await fetchReportBlob(r), name: r.filename }));
+      if (!res) { status('Save cancelled. The report is still ready - click Save as... again any time.'); return; }
+      const kb = Math.max(1, Math.round(res.size / 1024)).toLocaleString();
+      status(`Saved <b>${esc(res.name)}</b> (${kb} KB)${res.dialog ? '' : ' in your Downloads folder'}.` +
+             (res.warning ? `<br>${esc(res.warning)}` : ''), res.warning ? undefined : 'ok');
     } catch (e) {
       status(`Report not saved: ${esc(e.message || e)}`, 'error');
+    }
+  }
+
+  async function downloadReport(r) {
+    try {
+      download(await fetchReportBlob(r), r.filename);
+      status(`Downloaded <b>${esc(r.filename)}</b> to your Downloads folder.`, 'ok');
+    } catch (e) {
+      status(`Download failed: ${esc(e.message || e)}`, 'error');
+    }
+  }
+
+  async function copyToFolder(r) {
+    try {
+      const res = await fetch(`/api/ai-report/copy/${r.token}`, { method: 'POST' });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
+      status(`Saved a copy: <code>${esc(d.saved_to)}</code>`, 'ok');
+    } catch (e) {
+      status(`Copy not saved: ${esc(e.message || e)}`, 'error');
+    }
+  }
+
+  async function openFolder() {
+    try {
+      const res = await fetch('/api/ai-report/open-folder', { method: 'POST' });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(d.error || `HTTP ${res.status}`);
+    } catch (e) {
+      status(`Could not open the folder: ${esc(e.message || e)}`, 'error');
     }
   }
 
@@ -264,7 +333,7 @@
     root.id = 'aiReportPanel';
     root.innerHTML = `
       <h3 class="ar-title">AI report</h3>
-      <p class="muted" style="margin-top:-6px">Save the results, or turn them into a Word report with findings and recommendations.</p>
+      <p class="muted" style="margin-top:-6px">Save the results, or turn them into a Word report and/or an Excel workbook with findings, recommendations, charts and benchmarks.</p>
       <div class="controls ar-controls">
         <div><label for="arLocation">Location / sensor name</label><input type="text" id="arLocation" data-ar="location"></div>
         <div><label for="arUnits">Units</label><input type="text" id="arUnits" data-ar="units" placeholder="°F"></div>
@@ -281,12 +350,14 @@
       <div class="row ar-buttons" style="margin-top:14px;gap:10px">
         <button type="button" data-ar="savecsv" class="ar-secondary">Save results CSV...</button>
         <button type="button" data-ar="generate">Generate AI report (Word)</button>
+        <button type="button" data-ar="generatex">Generate AI report (Excel)</button>
+        <button type="button" data-ar="generateb" class="ar-secondary">Generate both</button>
       </div>
-      <div class="ar-ready" data-ar="ready" style="display:none">
-        <span class="ar-ready-name" data-ar="readyname"></span>
-        <button type="button" data-ar="open" class="ar-secondary">Open in Word</button>
-        <button type="button" data-ar="saveas">Save as...</button>
+      <div class="ar-options">
+        <label><input type="checkbox" data-ar="incdata" checked> Excel: include all readings (Data tab)</label>
+        <label data-ar="autoopenbox"><input type="checkbox" data-ar="autoopen" checked> Open the report when it is ready</label>
       </div>
+      <div class="ar-ready" data-ar="ready" style="display:none"></div>
       <p class="muted" data-ar="cfg" style="margin:12px 0 0"></p>
       <p data-ar="msg" role="status" style="margin:8px 0 0;font-size:13.5px;line-height:1.5"></p>`;
     const st = document.createElement('style');
@@ -299,9 +370,18 @@
       .ar-panel .ar-controls input, .ar-panel .ar-controls select { width:100%; }
       .ar-panel button.ar-secondary { background:#fff; color:#1f2a33; border:1px solid #d5dbe1; }
       .ar-panel button.ar-secondary:hover { background:#e8f0fe; }
-      .ar-panel .ar-ready { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin-top:12px; padding:10px 12px;
-                            background:#f3f7ff; border:1px solid #c9d8f6; border-radius:6px; }
+      .ar-panel .ar-options { display:flex; flex-wrap:wrap; gap:6px 22px; margin-top:10px; font-size:13px; color:#3a4753; }
+      .ar-panel .ar-options label { display:inline-flex !important; align-items:center; gap:7px; font-weight:400; margin:0 !important; width:auto !important; white-space:nowrap; }
+      .ar-panel .ar-options label[hidden] { display:none !important; }
+      .ar-panel .ar-options input[type=checkbox] { width:auto !important; margin:0 !important; height:auto; }
+      .ar-panel .ar-ready { margin-top:12px; padding:6px 12px; background:#f3f7ff; border:1px solid #c9d8f6; border-radius:6px; }
+      .ar-panel .ar-ready-row { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:6px 0; }
+      .ar-panel .ar-ready-row + .ar-ready-row { border-top:1px solid #dbe5f7; }
       .ar-panel .ar-ready-name { font-weight:600; margin-right:auto; }
+      .ar-panel .ar-ready-foot { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:8px 0 4px; border-top:1px solid #dbe5f7; }
+      .ar-panel .ar-ready-foot .muted { margin-right:auto; }
+      .ar-panel .ar-kind { font:600 10.5px/1 Arial; letter-spacing:.04em; color:#fff; padding:4px 6px; border-radius:4px; }
+      .ar-panel .ar-kind-docx { background:#2a78d6; } .ar-panel .ar-kind-xlsx { background:#1d7a46; }
       .ar-panel code { font-size:12px; background:#f3f5f7; padding:1px 5px; border-radius:4px; }
       @media (max-width: 760px) { .ar-panel .ar-controls { grid-template-columns: 1fr; } }`;
     document.head.appendChild(st);
@@ -317,9 +397,9 @@
       updateSource();
     };
     $('[data-ar=savecsv]').onclick = saveCsv;
-    $('[data-ar=generate]').onclick = generate;
-    $('[data-ar=open]').onclick = () => openReport(false);
-    $('[data-ar=saveas]').onclick = saveReportAs;
+    $('[data-ar=generate]').onclick = () => generate('docx');
+    $('[data-ar=generatex]').onclick = () => generate('xlsx');
+    $('[data-ar=generateb]').onclick = () => generate('both');
     updateSource();
     loadStatus();
   }
@@ -366,6 +446,7 @@
       const res = await fetch('/api/ai-report/status');
       if (!res.ok) return;
       const s = await res.json();
+      $('[data-ar=autoopenbox]').hidden = !s.can_open;   // only the PC version can open Word / Excel
       const bits = [];
       bits.push(s.ai_configured ? `OpenAI: on (${esc(s.model)})` : 'OpenAI: off - add [openai] api_key to config.local.ini (plain wording is used meanwhile)');
       bits.push(s.reference_found ? `Reference: ${esc(s.reference_document)}` : 'Reference document: not found - set [reports] reference_document');
