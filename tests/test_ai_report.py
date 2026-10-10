@@ -318,3 +318,21 @@ def test_file_names_stay_short(monkeypatch, tmp_path, csv_text):
         assert sorted(stored) == sorted([r["token"] + "." + r["kind"], r["token"] + ".name"])
         dl = client.get(f"/api/ai-report/file/{r['token']}")
         assert r["filename"] in dl.headers["Content-Disposition"]
+
+
+def test_open_uses_short_temp_folder(monkeypatch, tmp_path, csv_text):
+    """Open in Word/Excel copies the report to the temp folder with its full readable name,
+    even when the app folder is very deep (Windows 260-character limit)."""
+    from app import create_app
+    from app.config import Config
+    import os as _os
+    import tempfile
+    deep = tmp_path / ("d" * 60) / ("e" * 60) / ("f" * 60)
+    monkeypatch.setattr(Config, "UPLOAD_DIR", deep)
+    monkeypatch.setenv("APP_REPORTS_FOLDER", str(tmp_path / "results"))
+    client = create_app().test_client()
+    d = _post(client, csv_text, format="xlsx").get_json()
+    opened = []
+    monkeypatch.setattr(_os, "startfile", lambda p: opened.append(p), raising=False)
+    assert client.post(f"/api/ai-report/open/{d['token']}").status_code == 200
+    assert opened[0].startswith(tempfile.gettempdir()) and opened[0].endswith(d["filename"])

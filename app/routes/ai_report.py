@@ -217,9 +217,13 @@ def report_open(token):
     if not path:
         return jsonify({"error": "This report is no longer available. Generate it again."}), 404
     try:
-        nice = path.with_name(fit_name(path.parent, _display_name(path)))
-        if not nice.exists():
-            nice.write_bytes(path.read_bytes())
+        # Word / Excel show the file name, so open a copy with the readable name - from the
+        # short Windows temp folder, not from the (long) project folder, to stay under 260 characters.
+        import tempfile
+        folder = Path(tempfile.gettempdir()) / "ExtremeAnalyticsLab"
+        folder.mkdir(parents=True, exist_ok=True)
+        nice = folder / fit_name(folder, _display_name(path))
+        nice.write_bytes(path.read_bytes())
         os.startfile(str(nice))  # noqa: S606 - opens the default app (Word / Excel)
     except OSError as exc:
         return jsonify({"error": f"Could not open the report: {exc.strerror or exc}"}), 500
