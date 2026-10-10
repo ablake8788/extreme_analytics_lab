@@ -1,0 +1,48 @@
+# Byte-compiled / optimized files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Flask
+instance/
+.flaskenv
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Environment variables / secrets
+.env
+
+# Uploaded data (user files, not source)
+uploads/*.csv
+uploads/*.xlsx
+uploads/*.xlsm
+
+# PyInstaller build output
+build/
+dist/
+*.spec
+
+# Patch backups
+*.bak
+.venv_old_*/
+
+# Web deployment - private settings and upload zip
+config.local.ini
+extreme_server.zip
+
+# AI reports contain sensor data
+results/
