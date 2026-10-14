@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Extreme &amp; Change Analytics Lab</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='css/theme.css') }}">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+</head>
+<body>
+<header>
+  <div>
+    <span class="eyebrow">TIME-SERIES ANALYTICS</span>
+    <h1>Extreme &amp; Change Analytics Lab</h1>
+    <p>Implements the Consolidated Standardized Time-Series Analytics Framework: Extreme detection, Change/Rate-of-Change analysis, Persistence with hysteresis, and Materiality scoring.</p>
+  </div>
+</header>
+
+<main>
+  <section class="panel">
+    <h2>1. Upload data</h2>
+    <div class="row">
+      <input type="file" id="fileInput" accept=".csv,.xlsx,.xlsm">
+      <button id="uploadBtn">Upload</button>
+    </div>
+    <p id="uploadStatus" class="muted"></p>
+    <div id="sheetRow" class="row" style="display:none">
+      <div>
+        <label for="sheetSelect">Sheet</label>
+        <select id="sheetSelect"></select>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" id="columnsPanel" style="display:none">
+    <h2>2. Select columns</h2>
+    <div class="controls">
+      <div>
+        <label for="timestampColumn">Timestamp column (optional)</label>
+        <select id="timestampColumn"><option value="">— row index —</option></select>
+      </div>
+      <div>
+        <label for="valueColumn">Value column (numeric, required)</label>
+        <select id="valueColumn"></select>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" id="paramsPanel" style="display:none">
+    <h2>3. Statistical calc parameters</h2>
+
+    <div class="group-title">Baseline method (Extreme channel)</div>
+    <div class="controls">
+      <div>
+        <label for="baselineMethod">Method</label>
+        <select id="baselineMethod">
+          <option value="bollinger" selected>Rolling Mean/Std (Bollinger / Z-score)</option>
+          <option value="ewma">EWMA baseline</option>
+          <option value="percentile">Percentile / Quantile</option>
+          <option value="iqr">IQR fences</option>
+          <option value="mad">MAD / Robust Z-score</option>
+        </select>
+      </div>
+      <div><label for="window">Window (W)</label><input type="number" id="window" value="{{ defaults.WINDOW }}" min="2"></div>
+      <div><label for="ewmaAlpha">EWMA alpha</label><input type="number" id="ewmaAlpha" value="{{ defaults.EWMA_ALPHA }}" step="0.05" min="0.01" max="1"></div>
+    </div>
+
+    <div class="group-title">Extreme thresholds</div>
+    <div class="controls">
+      <div><label for="kE">K_E — extreme entry (std devs)</label><input type="number" id="kE" value="{{ defaults.K_E }}" step="0.1"></div>
+      <div><label for="kP">K_P — persistence continuation</label><input type="number" id="kP" value="{{ defaults.K_P }}" step="0.1"></div>
+      <div><label for="percentileP">Percentile p (if percentile method)</label><input type="number" id="percentileP" value="{{ defaults.PERCENTILE_P }}" step="0.005" min="0.001" max="0.25"></div>
+      <div><label for="kIqr">K_IQR (if IQR method)</label><input type="number" id="kIqr" value="{{ defaults.K_IQR }}" step="0.1"></div>
+    </div>
+
+    <div class="group-title">Persistence / materiality</div>
+    <div class="controls">
+      <div><label for="nP">N_P — periods for Persistent</label><input type="number" id="nP" value="{{ defaults.N_P }}" min="1"></div>
+      <div><label for="nM">N_M — periods for Confirmed Shift</label><input type="number" id="nM" value="{{ defaults.N_M }}" min="1"></div>
+      <div><label for="kM">K_M — min mean |Z| for confirmed shift</label><input type="number" id="kM" value="{{ defaults.K_M }}" step="0.1"></div>
+      <div><label for="nExit">N_EXIT — periods to close an event</label><input type="number" id="nExit" value="{{ defaults.N_EXIT }}" min="1"></div>
+    </div>
+
+    <div class="group-title">Change / Rate-of-Change channel</div>
+    <div class="controls">
+      <div><label for="rocWindow">ROC horizon (h)</label><input type="number" id="rocWindow" value="{{ defaults.ROC_WINDOW }}" min="1"></div>
+      <div><label for="rocBaselineWindow">ROC baseline window</label><input type="number" id="rocBaselineWindow" value="{{ defaults.ROC_BASELINE_WINDOW }}" min="2"></div>
+      <div><label for="rocK">ROC_K — abnormal |Z_ROC| threshold</label><input type="number" id="rocK" value="{{ defaults.ROC_K }}" step="0.1"></div>
+      <div><label for="frequencyWindow">Frequency window</label><input type="number" id="frequencyWindow" value="{{ defaults.FREQUENCY_WINDOW }}" min="1"></div>
+      <div><label for="frequencyMinCount">Min recurrences to be material</label><input type="number" id="frequencyMinCount" value="{{ defaults.FREQUENCY_MIN_COUNT }}" min="1"></div>
+    </div>
+
+    <details>
+      <summary>Advanced: Materiality score weights</summary>
+      <div class="controls">
+        <div><label for="wMagnitude">Weight — magnitude</label><input type="number" id="wMagnitude" value="{{ defaults.W_MAGNITUDE }}" step="0.05"></div>
+        <div><label for="wDuration">Weight — duration</label><input type="number" id="wDuration" value="{{ defaults.W_DURATION }}" step="0.05"></div>
+        <div><label for="wFrequency">Weight — frequency</label><input type="number" id="wFrequency" value="{{ defaults.W_FREQUENCY }}" step="0.05"></div>
+      </div>
+    </details>
+
+    <button id="analyzeBtn" style="margin-top:14px">Run analysis</button>
+    <p id="analyzeStatus" class="muted"></p>
+  </section>
+
+  <section class="panel" id="resultsPanel" style="display:none">
+    <div class="row" style="justify-content:space-between; margin-bottom:6px">
+      <h2 style="margin:0">Results</h2>
+      <div class="row" style="margin:0">
+        <button id="reportBtn" class="secondary">Generate report &amp; chart</button>
+        <span id="reportStatus" class="muted"></span>
+      </div>
+    </div>
+    <div id="summaryGrid" class="summary-grid"></div>
+    <canvas id="chart" height="110"></canvas>
+    <div class="table-wrap">
+      <table id="resultsTable">
+        <thead><tr>
+          <th>Timestamp</th><th>Value</th><th>Z</th><th>State</th>
+          <th>Persistence</th><th>Extreme</th><th>Abnormal Change</th><th>Materiality</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel" id="reportPanel" style="display:none">
+    <div class="row" style="justify-content:space-between">
+      <h2 style="margin:0">Generated report</h2>
+      <div class="row" style="margin:0">
+        <button id="downloadChartBtn" class="secondary">Download chart (PNG)</button>
+        <button id="downloadReportBtn" class="secondary">Download report (Markdown)</button>
+      </div>
+    </div>
+    <img id="reportChartImg" style="max-width:100%; border-radius:10px; border:1px solid var(--line); margin:14px 0">
+    <div id="reportFindings"></div>
+  </section>
+</main>
+<footer>Extreme &amp; Change Analytics Lab &middot; Implements the Consolidated Standardized Time-Series Analytics Framework.</footer>
+<script src="{{ url_for('static', filename='js/app.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/ai_report.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/data_listing.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/build_badge.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/chart_explorer.js') }}"></script>
+</body>
+</html>

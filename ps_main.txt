@@ -1,0 +1,467 @@
+EXTREME & CHANGE ANALYTICS LAB - POWERSHELL COMMANDS
+Project folder: C:\Users\ablak\MorrisAutoGroup Dropbox\Alexander Blake\MorrisUniversalAutoGroup\ara\ara\Ange\projects\ara\Titanium Intelligent Solution\Titanium Analytics\working\extreme_analytics_lab
+
+Run every command from the project folder in PowerShell.
+Lines starting with # are notes, not commands.
+
+==============================================================================
+1. OPEN THE PROJECT AND ALLOW SCRIPTS (start of every session)
+==============================================================================
+cd "C:\Users\ablak\MorrisAutoGroup Dropbox\Alexander Blake\MorrisUniversalAutoGroup\ara\ara\Ange\projects\ara\Titanium Intelligent Solution\Titanium Analytics\working\extreme_analytics_lab"
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+git checkout dev
+
+==============================================================================
+2. EVERYDAY COMMANDS
+==============================================================================
+# Clean environment + tests + run from source (http://127.0.0.1:5100, Ctrl+C to stop)
+.\rebuild.ps1
+
+# Tests + next build number + build dist\ExtremeAnalyticsLab.exe
+.\build.ps1
+
+# Start the .exe and open the browser
+.\launch.ps1
+
+# Run EVERY test (unit tests, local + server/login live checks, passenger_wsgi, .exe)
+.\test_all.ps1
+# Same without building the .exe (faster)
+.\test_all.ps1 -SkipExe
+
+# Stop a running .exe
+Stop-Process -Name ExtremeAnalyticsLab
+
+# Run only the tests (venv active)
+python -m pytest tests\ -q --tb=short
+
+==============================================================================
+3. INSTALL UPDATES FROM THE UNZIP FOLDER
+==============================================================================
+$zip = "C:\Users\ablak\MorrisAutoGroup Dropbox\Alexander Blake\MorrisUniversalAutoGroup\ara\ara\Ange\projects\ara\Titanium Intelligent Solution\Titanium Analytics\working\unzip\extreme_all_updates.zip"
+$project = "C:\Users\ablak\MorrisAutoGroup Dropbox\Alexander Blake\MorrisUniversalAutoGroup\ara\ara\Ange\projects\ara\Titanium Intelligent Solution\Titanium Analytics\working\extreme_analytics_lab"
+Set-Location $project
+Test-Path $zip          # must print True
+
+Expand-Archive $zip -DestinationPath $project -Force
+Get-ChildItem *.ps1 | Unblock-File
+
+# One-time patches (safe to run again - they skip what is already done)
+python apply_time_filter.py
+python apply_chart_explorer.py
+python apply_build_counter.py
+python apply_data_listing.py
+python apply_theme.py
+python apply_web_deployment.py
+python apply_ai_report.py
+
+# Check the patches are in place
+Select-String -Path app\routes\api.py -Pattern "time_range" | Select-Object -First 1
+Select-String -Path app\static\js\app.js -Pattern "TIME PERIOD FILTER"
+Select-String -Path app\templates\index.html -Pattern "chart_explorer|build_badge|data_listing|theme"
+Select-String -Path app\routes\api.py -Pattern "DATA LISTING EXTRAS"
+
+# If the zip was already extracted inside the unzip folder, copy instead:
+Copy-Item "C:\Users\ablak\MorrisAutoGroup Dropbox\Alexander Blake\MorrisUniversalAutoGroup\ara\ara\Ange\projects\ara\Titanium Intelligent Solution\Titanium Analytics\working\unzip\*" -Destination $project -Recurse -Force
+
+==============================================================================
+4. GIT - GET LATEST, COMMIT, PUSH
+==============================================================================
+# Get latest
+git checkout dev
+git pull origin dev
+
+# See what is behind before pulling
+git fetch origin
+git status
+git log --oneline dev..origin/dev
+
+# Commit and push
+git add -A
+git status              # only source files - no .venv, dist, build, uploads, .bak
+git commit -m "Describe the change"
+git pull origin dev
+git push origin dev
+
+# Keep the build number in git after each build
+git add app/static/build_info.json
+git commit -m "Build N"
+git push origin dev
+
+# Local changes block a pull
+git stash
+git pull origin dev
+git stash pop
+
+# Throw away local changes and match GitHub exactly (careful)
+git fetch origin
+git reset --hard origin/dev
+
+# Promote dev -> qa -> main
+git checkout qa;   git pull origin qa;   git merge dev; git push origin qa
+git checkout main; git pull origin main; git merge qa;  git push origin main
+git checkout dev
+
+==============================================================================
+WEB DEPLOYMENT (GODADDY) - see info_main\web_deployment\web_deployment_steps.txt
+==============================================================================
+# Test the web login locally: edit config.local.ini  ([app] mode = server,
+#   [server] password = test123), then:
+python run.py
+# Check GoDaddy's start file loads
+python -c "import passenger_wsgi; print('passenger_wsgi OK')"
+# Set mode = local in config.local.ini again afterwards
+
+# Build the upload zip for GoDaddy
+.\make_server_zip.ps1
+
+==============================================================================
+AI REPORT - see info_main\run_instructions\run_instructions.txt section 10
+==============================================================================
+# OpenAI key goes in config.local.ini only:  [openai]  api_key = sk-...
+notepad config.local.ini
+# What the app sees (never prints the key)
+python -c "from app.ai_settings import load_ai_settings as L; s=L(); print(s.public_status('local'))"
+
+==============================================================================
+5. TROUBLESHOOTING
+==============================================================================
+# .venv locked / "being used by another process"
+#   Close VS Code and app windows, pause Dropbox, then:
+deactivate
+Get-Process python -ErrorAction SilentlyContinue | Stop-Process -Force
+Remove-Item -Recurse -Force .venv
+python -m venv .venv
+Set-Content -Path .venv -Stream com.dropbox.ignored -Value 1
+
+# pip broken ("No module named pip._internal...") -> same as above: delete and recreate .venv
+
+# Script "is not recognized" -> the .ps1 is not in this folder
+dir *.ps1
+
+# Downloaded scripts blocked
+Get-ChildItem *.ps1 | Unblock-File
+
+# Check config.py line 1 is "import configparser"
+Get-Content app\config.py -TotalCount 1
+python -c "import app.config; print('config OK')"
+
+# Browser shows old page -> press Ctrl+F5
+
+# Show current build number
+Get-Content app\static\build_info.json
+
+==============================================================================
+6. FULL SCRIPT: build.ps1
+==============================================================================
+# build.ps1 - Builds dist\ExtremeAnalyticsLab.exe from the extreme_analytics_lab project.
+# Run from the project root (the folder that contains run.py and requirements.txt).
+
+$ErrorActionPreference = "Stop"
+$AppName = "ExtremeAnalyticsLab"
+
+Write-Host "== Extreme & Change Analytics Lab - EXE build ==" -ForegroundColor Cyan
+
+# 0a. The .exe always runs in local mode (no login)
+if ((Test-Path "config.ini") -and (Select-String -Path "config.ini" -Pattern '^\s*mode\s*=\s*server' -Quiet)) {
+    Write-Host "config.ini has mode = server. The .exe must be built with mode = local." -ForegroundColor Red
+    Write-Host "Set [app] mode = local in config.ini (use config.local.ini to test the login locally)." -ForegroundColor Red
+    exit 1
+}
+
+# 0. Sanity checks
+foreach ($f in @("run.py", "requirements.txt")) {
+    if (-not (Test-Path $f)) {
+        Write-Host "Missing $f. Run this script from the extreme_analytics_lab project root." -ForegroundColor Red
+        exit 1
+    }
+}
+
+# 1. Virtual environment (reuse if it exists)
+if (-not (Test-Path ".venv")) {
+    Write-Host "Creating virtual environment..." -ForegroundColor Yellow
+    python -m venv .venv
+}
+# Keep Dropbox from syncing the venv and build output
+foreach ($d in @(".venv", "build", "dist")) {
+    if (-not (Test-Path $d)) { New-Item -ItemType Directory $d | Out-Null }
+    try { Set-Content -Path $d -Stream "com.dropbox.ignored" -Value 1 -ErrorAction Stop } catch { }
+}
+Write-Host "Activating virtual environment..." -ForegroundColor Yellow
+& .\.venv\Scripts\Activate.ps1
+
+# 1b. Health check: a half-deleted venv (e.g. from a Dropbox lock) has a broken pip
+$pipOk = $false
+try { & .\.venv\Scripts\python.exe -m pip --version *> $null; $pipOk = ($LASTEXITCODE -eq 0) } catch { $pipOk = $false }
+if (-not $pipOk) {
+    Write-Host "Virtual environment is damaged (pip is broken). Recreating it..." -ForegroundColor Yellow
+    if (Get-Command deactivate -ErrorAction SilentlyContinue) { deactivate }
+    try { Remove-Item -Recurse -Force ".venv" -ErrorAction Stop }
+    catch {
+        Write-Host "Could not delete .venv - it is locked. Close VS Code/terminals using it, pause Dropbox, and run .\build.ps1 again." -ForegroundColor Red
+        exit 1
+    }
+    python -m venv .venv
+    try { Set-Content -Path ".venv" -Stream "com.dropbox.ignored" -Value 1 -ErrorAction Stop } catch { }
+    & .\.venv\Scripts\Activate.ps1
+}
+
+# 2. Dependencies + build tools (stop on any failure)
+Write-Host "Installing dependencies..." -ForegroundColor Yellow
+python -m pip install --upgrade pip
+if ($LASTEXITCODE -ne 0) { Write-Host "pip upgrade failed." -ForegroundColor Red; exit 1 }
+python -m pip install -r requirements.txt pyinstaller pytest
+if ($LASTEXITCODE -ne 0) { Write-Host "Dependency install failed - see errors above." -ForegroundColor Red; exit 1 }
+
+# 3. Tests must pass before building
+if (Test-Path "tests") {
+    Write-Host "Running tests..." -ForegroundColor Yellow
+    python -m pytest tests\ -v
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "`nTests failed. Build aborted - fix the errors above first." -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "Tests passed." -ForegroundColor Green
+} else {
+    Write-Host "No tests folder found - skipping tests." -ForegroundColor Yellow
+}
+
+# 3b. Build counter: next build number, stamped into app\static\build_info.json
+#     (bundled into the exe and shown in the app's corner badge)
+$infoPath = "app\static\build_info.json"
+$prevInfo = $null
+$lastBuild = 0
+if (Test-Path $infoPath) {
+    $prevInfo = [IO.File]::ReadAllText((Resolve-Path $infoPath))
+    try { $lastBuild = [int](($prevInfo | ConvertFrom-Json).build) } catch { $lastBuild = 0 }
+}
+$buildNo = $lastBuild + 1
+$branch = ""; $commit = ""
+try { $branch = (& git rev-parse --abbrev-ref HEAD 2>$null) } catch { }
+try { $commit = (& git rev-parse --short HEAD 2>$null) } catch { }
+$info = [ordered]@{
+    build    = $buildNo
+    version  = "1.0.$buildNo"
+    built_at = (Get-Date -Format "yyyy-MM-dd HH:mm")
+    branch   = "$branch".Trim()
+    commit   = "$commit".Trim()
+}
+if (-not (Test-Path "app\static")) { New-Item -ItemType Directory "app\static" | Out-Null }
+[IO.File]::WriteAllText((Join-Path (Get-Location).Path $infoPath), ($info | ConvertTo-Json))
+Write-Host "Build number: $buildNo (version $($info.version))" -ForegroundColor Cyan
+
+# 4. Find Flask templates/static folders so they get bundled into the exe
+$root = (Get-Location).Path
+$excluded = @(".venv", "build", "dist", ".git")
+$dataDirs = Get-ChildItem -Recurse -Directory |
+    Where-Object { $_.Name -in @("templates", "static") } |
+    Where-Object {
+        $rel = $_.FullName.Substring($root.Length + 1)
+        -not ($excluded | Where-Object { $rel -like "$_*" })
+    }
+
+$pyiArgs = @("--noconfirm", "--clean", "--onefile", "--name", $AppName)
+foreach ($d in $dataDirs) {
+    $rel = $d.FullName.Substring($root.Length + 1)
+    Write-Host "Bundling data folder: $rel" -ForegroundColor DarkGray
+    $pyiArgs += @("--add-data", "$rel;$rel")
+}
+
+# config.ini (default parameters) and matplotlib's image backend for reports
+if (Test-Path "config.ini") { $pyiArgs += @("--add-data", "config.ini;.") }
+if (Select-String -Path "requirements.txt" -Pattern "matplotlib" -Quiet) {
+    $pyiArgs += @("--hidden-import", "matplotlib.backends.backend_agg")
+}
+# python-docx needs its default Word template inside the exe (AI reports)
+if (Select-String -Path "requirements.txt" -Pattern "python-docx" -Quiet) {
+    $pyiArgs += @("--collect-data", "docx")
+}
+# the reference document for AI reports (relative path in config.ini)
+if (Test-Path "info_main\reference") { $pyiArgs += @("--add-data", "info_main\reference;info_main\reference") }
+
+# Include the whole app package and the Excel readers
+if (Test-Path "app\__init__.py") { $pyiArgs += @("--collect-submodules", "app") }
+$pyiArgs += @("--hidden-import", "openpyxl")
+$pyiArgs += "run.py"
+
+# 5. Clean old output and build (stop a running copy first so dist\ isn't locked)
+Get-Process -Name $AppName -ErrorAction SilentlyContinue | Stop-Process -Force
+Start-Sleep -Seconds 1
+foreach ($d in @("build", "dist")) {
+    if (Test-Path $d) { Remove-Item -Recurse -Force $d }
+}
+if (Test-Path "$AppName.spec") { Remove-Item -Force "$AppName.spec" }
+
+Write-Host "Building $AppName.exe (1-3 minutes)..." -ForegroundColor Yellow
+pyinstaller @pyiArgs
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path "dist\$AppName.exe")) {
+    # Failed build does not use up a build number
+    if ($prevInfo) { [IO.File]::WriteAllText((Join-Path (Get-Location).Path $infoPath), $prevInfo) }
+    else { Remove-Item $infoPath -ErrorAction SilentlyContinue }
+    Write-Host "`nBuild failed. Paste the error above into the chat." -ForegroundColor Red
+    exit 1
+}
+
+foreach ($d in @("build", "dist")) {
+    try { Set-Content -Path $d -Stream "com.dropbox.ignored" -Value 1 -ErrorAction Stop } catch { }
+}
+
+$size = [math]::Round((Get-Item "dist\$AppName.exe").Length / 1MB, 1)
+Write-Host "`nBuild succeeded! dist\$AppName.exe ($size MB) - build $buildNo" -ForegroundColor Green
+Write-Host "Commit app\static\build_info.json so the build number is kept in git." -ForegroundColor DarkGray
+Write-Host "Run it with:  .\dist\$AppName.exe" -ForegroundColor Cyan
+Write-Host "Then open:    http://127.0.0.1:5100" -ForegroundColor Cyan
+
+==============================================================================
+6. FULL SCRIPT: rebuild.ps1
+==============================================================================
+# rebuild.ps1 - Clean rebuild of the dev environment, then runs the app from source.
+# Run from the extreme_analytics_lab project root (the folder that contains run.py).
+
+$ErrorActionPreference = "Stop"
+
+Write-Host "== Extreme & Change Analytics Lab - rebuild ==" -ForegroundColor Cyan
+
+foreach ($f in @("run.py", "requirements.txt")) {
+    if (-not (Test-Path $f)) {
+        Write-Host "Missing $f. Run this script from the extreme_analytics_lab project root." -ForegroundColor Red
+        exit 1
+    }
+}
+
+# 1. Leave any active venv, stop processes using it, and delete it
+if (Get-Command deactivate -ErrorAction SilentlyContinue) { deactivate }
+
+$venvPath = Join-Path (Get-Location).Path ".venv"
+
+# Stop the built exe and any python.exe running from this project's .venv
+Get-Process -Name "ExtremeAnalyticsLab" -ErrorAction SilentlyContinue | Stop-Process -Force
+Get-Process -Name "python", "pythonw" -ErrorAction SilentlyContinue |
+    Where-Object { $_.Path -and $_.Path.StartsWith($venvPath, [System.StringComparison]::OrdinalIgnoreCase) } |
+    ForEach-Object {
+        Write-Host "Stopping python process $($_.Id) that is using .venv..." -ForegroundColor Yellow
+        Stop-Process -Id $_.Id -Force
+    }
+
+if (Test-Path ".venv") {
+    Write-Host "Removing old virtual environment..." -ForegroundColor Yellow
+    $removed = $false
+    for ($try = 1; $try -le 3 -and -not $removed; $try++) {
+        try {
+            Remove-Item -Recurse -Force ".venv" -ErrorAction Stop
+            $removed = $true
+        } catch {
+            Write-Host "  .venv is locked (attempt $try of 3), retrying..." -ForegroundColor DarkYellow
+            Start-Sleep -Seconds 3
+        }
+    }
+    if (-not $removed) {
+        # Still locked (usually Dropbox syncing): move it aside and continue
+        $stale = ".venv_old_" + (Get-Date -Format "yyyyMMdd_HHmmss")
+        try {
+            Rename-Item ".venv" $stale -ErrorAction Stop
+            Write-Host "  Could not delete .venv; renamed it to $stale. Delete it later." -ForegroundColor DarkYellow
+        } catch {
+            Write-Host "`n.venv is locked by another program and cannot be removed or renamed." -ForegroundColor Red
+            Write-Host "Close VS Code / terminals using it, pause Dropbox syncing, then run .\rebuild.ps1 again." -ForegroundColor Red
+            exit 1
+        }
+    }
+}
+
+# Remove leftover renamed venvs from earlier runs (ignore if still locked)
+Get-ChildItem -Directory -Filter ".venv_old_*" -Force -ErrorAction SilentlyContinue |
+    ForEach-Object { Remove-Item -Recurse -Force $_.FullName -ErrorAction SilentlyContinue }
+
+# 2. Clear caches
+Get-ChildItem -Recurse -Directory -Include "__pycache__", ".pytest_cache" -ErrorAction SilentlyContinue |
+    Where-Object { $_.FullName -notlike "*\.venv\*" } |
+    Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+
+# 3. Fresh venv
+Write-Host "Creating virtual environment..." -ForegroundColor Yellow
+python -m venv .venv
+
+# Tell Dropbox not to sync .venv (prevents file locks and wasted upload)
+try { Set-Content -Path ".venv" -Stream "com.dropbox.ignored" -Value 1 -ErrorAction Stop }
+catch { Write-Host "  (Could not mark .venv as Dropbox-ignored; continuing.)" -ForegroundColor DarkGray }
+
+& .\.venv\Scripts\Activate.ps1
+
+# 4. Dependencies
+Write-Host "Installing dependencies..." -ForegroundColor Yellow
+python -m pip install --upgrade pip
+if ($LASTEXITCODE -ne 0) { Write-Host "pip upgrade failed." -ForegroundColor Red; exit 1 }
+python -m pip install -r requirements.txt pytest
+if ($LASTEXITCODE -ne 0) { Write-Host "Dependency install failed - see errors above." -ForegroundColor Red; exit 1 }
+
+# 5. Tests
+if (Test-Path "tests") {
+    Write-Host "Running tests..." -ForegroundColor Yellow
+    python -m pytest tests\ -v
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "`nTests failed. Fix the errors above before running the app." -ForegroundColor Red
+        exit 1
+    }
+    Write-Host "Tests passed." -ForegroundColor Green
+}
+
+# 6. Run
+Write-Host "`nStarting app at http://127.0.0.1:5100  (Ctrl+C to stop)" -ForegroundColor Cyan
+python run.py
+
+==============================================================================
+6. FULL SCRIPT: launch.ps1
+==============================================================================
+# launch.ps1 - Starts dist\ExtremeAnalyticsLab.exe and opens it in the browser.
+# Run from the extreme_analytics_lab project root after build.ps1 has succeeded.
+
+$ErrorActionPreference = "Stop"
+$AppName = "ExtremeAnalyticsLab"
+$Exe = "dist\$AppName.exe"
+$Url = "http://127.0.0.1:5100"
+
+Write-Host "== Extreme & Change Analytics Lab - launch ==" -ForegroundColor Cyan
+
+if (-not (Test-Path $Exe)) {
+    Write-Host "$Exe not found. Run .\build.ps1 first." -ForegroundColor Red
+    exit 1
+}
+
+# Stop an older copy that may still be running on the same port
+$running = Get-Process -Name $AppName -ErrorAction SilentlyContinue
+if ($running) {
+    Write-Host "Stopping previous instance..." -ForegroundColor Yellow
+    $running | Stop-Process -Force
+    Start-Sleep -Seconds 1
+}
+
+$infoPath = "app\static\build_info.json"
+if (Test-Path $infoPath) {
+    try {
+        $bi = Get-Content $infoPath -Raw | ConvertFrom-Json
+        Write-Host "Build $($bi.build) (version $($bi.version), built $($bi.built_at))" -ForegroundColor Cyan
+    } catch { }
+}
+Write-Host "Starting $Exe ..." -ForegroundColor Yellow
+Start-Process -FilePath (Resolve-Path $Exe)
+
+# Wait for the server to answer (up to ~30 seconds), then open the browser
+$ready = $false
+for ($i = 0; $i -lt 30; $i++) {
+    Start-Sleep -Seconds 1
+    try {
+        Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 2 | Out-Null
+        $ready = $true
+        break
+    } catch { }
+}
+
+if ($ready) {
+    Write-Host "App is running: $Url" -ForegroundColor Green
+    Start-Process $Url
+} else {
+    Write-Host "App did not respond at $Url. Check the app window for an error." -ForegroundColor Red
+    exit 1
+}
+
+Write-Host "To stop it, close the app window or run: Stop-Process -Name $AppName" -ForegroundColor Cyan

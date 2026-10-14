@@ -1,0 +1,28 @@
+; config.local.ini - PRIVATE settings for this PC only.
+; Copy this file to config.local.ini. config.local.ini is in .gitignore:
+; it is never committed, never packed into the .exe, never uploaded.
+;
+; To test the web login locally, set mode = server below and run
+;   python run.py   (or .\rebuild.ps1)
+; then open http://127.0.0.1:5100. Set mode = local to switch it off.
+; On GoDaddy do NOT use this file - use environment variables in cPanel.
+
+[app]
+mode = local
+
+[server]
+password = change-me
+secret_key = replace-with-a-long-random-string-at-least-16-characters
+; domain stays empty for local http testing (keeps cookies working on http)
+domain =
+upload_max_age_hours = 24
+session_hours = 12
+
+[openai]
+; your OpenAI API key - private, never committed
+; api_key = sk-...
+
+[reports]
+; optional: your own locations (override config.ini), for example
+; reference_document = C:\path\to\Titanium_analytics.docx
+; output_folder = C:\path\to\results

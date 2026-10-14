@@ -1,0 +1,22 @@
+git checkout qa
+git pull origin qa
+git merge dev
+git push origin qa
+
+git checkout main
+git pull origin main
+git merge qa
+git push origin main
+
+git checkout dev
+
+###################################
+
+git checkout dev
+Add-Content .gitignore "`n# Patch backups`n*.bak`n.venv_old_*/"
+git add -A
+git status
+git commit -m "Sensor-export data layout, From/To time filter, build scripts, project chart"
+git pull origin dev
+git push origin dev
+
