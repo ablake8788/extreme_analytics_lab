@@ -26,3 +26,23 @@ session_hours = 12
 ; optional: your own locations (override config.ini), for example
 ; reference_document = C:\path\to\Titanium_analytics.docx
 ; output_folder = C:\path\to\results
+
+; ---------------------------------------------------------------- Live system
+; Step 1 "Live system": metadata from ScyllaDB, readings from InfluxDB.
+; Layout: upstream/scylla_schema.cql and upstream/influx_schema.md.
+; Use READ-ONLY credentials. Check with: .venv\Scripts\python.exe tools\check_sources.py
+
+[influx]
+; url = https://influx.example.local:8086
+; org = titanium
+; bucket = building_data
+; token = <read-only token for the bucket>
+; InfluxDB 1.8: org = -, token = user:password, bucket = database/retention_policy
+
+[scylla]
+; hosts = 10.0.0.21, 10.0.0.22
+; port = 9042
+; keyspace = titanium_meta
+; username = analytics_ro
+; password = <password>
+; tls = false

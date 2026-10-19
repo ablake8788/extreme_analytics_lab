@@ -149,21 +149,33 @@ def status():
     return jsonify(st)
 
 
+def _read_results(filename: str, data: bytes) -> pd.DataFrame:
+    """A results file saved by the app: Excel (.xlsx, sheet "Results") or the older CSV."""
+    if filename.lower().endswith((".xlsx", ".xlsm")):
+        book = pd.ExcelFile(io.BytesIO(data))
+        sheet = "Results" if "Results" in book.sheet_names else book.sheet_names[0]
+        raw = book.parse(sheet)
+        if "Timestamp" in raw.columns and pd.api.types.is_datetime64_any_dtype(raw["Timestamp"]):
+            raw["Timestamp"] = raw["Timestamp"].dt.round("s")     # Excel keeps times as fractions of a day
+        return raw
+    return pd.read_csv(io.BytesIO(data), encoding="utf-8-sig", low_memory=False)
+
+
 @ai_report_bp.post("")
 def make_report():
     up = request.files.get("file")
     if not up or not up.filename:
-        return jsonify({"error": "No results CSV was sent."}), 400
+        return jsonify({"error": "No results file was sent."}), 400
     location = (request.form.get("location") or "").strip()[:120] or "Sensor"
     units = (request.form.get("units") or "").strip()[:12]
     try:
-        raw = pd.read_csv(io.BytesIO(up.read()), encoding="utf-8-sig", low_memory=False)
+        raw = _read_results(up.filename, up.read())
         facts = compute_facts(raw, location=location, units=units, source_name=Path(up.filename).name)
         prepared = prepare(raw)
     except FactsError as exc:
         return jsonify({"error": str(exc)}), 400
     except Exception as exc:
-        return jsonify({"error": f"Could not read the results CSV: {exc.__class__.__name__}"}), 400
+        return jsonify({"error": f"Could not read the results file: {exc.__class__.__name__}"}), 400
 
     fmt = (request.form.get("format") or "docx").strip().lower()
     if fmt not in ("docx", "xlsx", "both"):

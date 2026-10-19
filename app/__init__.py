@@ -25,6 +25,8 @@ def create_app(config_class=Config):
     app.register_blueprint(api_bp)
     from .routes.ai_report import ai_report_bp  # AI results reports
     app.register_blueprint(ai_report_bp)
+    from .routes.source import source_bp  # Live system: ScyllaDB metadata + InfluxDB readings
+    app.register_blueprint(source_bp)
     from .security import init_security  # web login (server mode only)
     init_security(app)
     return app

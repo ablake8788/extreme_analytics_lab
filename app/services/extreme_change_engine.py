@@ -38,6 +38,7 @@ class ExtremeParams:
     n_exit: int = 1                      # consecutive sub-threshold periods to close an event
     percentile_p: float = 0.01           # p for percentile method (uses p and 1-p)
     k_iqr: float = 1.5                   # IQR fence multiplier
+    max_gap_minutes: float = 30.0        # remove a reading that comes longer than this after the previous one (0 = off)
 
 
 @dataclass
@@ -299,28 +300,71 @@ def materiality(extreme_df: pd.DataFrame, persistence_df: pd.DataFrame,
 # Orchestration
 # --------------------------------------------------------------------------
 
+def time_gaps(index, max_gap_minutes: float):
+    """Minutes since the previous reading (as in the file), and True for every
+    reading whose gap is longer than max_gap_minutes - those readings are
+    skipped (removed). Each reading is checked against the reading just before it in the file.
+    Off when max_gap_minutes <= 0, when there is no time column, or when the
+    normal reading interval is already that long (hourly / daily data)."""
+    gap_min = pd.Series(np.nan, index=index, dtype="float64")
+    skip = pd.Series(False, index=index)
+    no_time = "Max time gap not applied: no time column."
+    if len(index) == 0 or pd.api.types.is_numeric_dtype(index):
+        return gap_min, skip, no_time
+    try:
+        t = pd.to_datetime(pd.Series(index), errors="coerce")
+    except (TypeError, ValueError):
+        return gap_min, skip, no_time
+    if t.isna().all():
+        return gap_min, skip, no_time
+    step = t.diff().dt.total_seconds().div(60).to_numpy()
+    gap_min = pd.Series(step, index=index, dtype="float64")
+    if not max_gap_minutes or max_gap_minutes <= 0:
+        return gap_min, skip, "Max time gap is off."
+    typical = float(np.nanmedian(step)) if np.isfinite(step).any() else 0.0
+    if typical >= max_gap_minutes:
+        return gap_min, skip, (f"Max time gap not applied: readings are normally {typical:g} min apart, "
+                               f"which is not shorter than {max_gap_minutes:g} min.")
+    skip = pd.Series(np.nan_to_num(step, nan=0.0) > max_gap_minutes, index=index)
+    return gap_min, skip, ""
+
+
 @dataclass
 class AnalysisResult:
     table: pd.DataFrame
     summary: dict = field(default_factory=dict)
+    keep: np.ndarray | None = None          # False = removed by Max time gap (positions in the input)
+    gap_minutes: np.ndarray | None = None   # minutes since the previous reading in the file
 
 
 def run_analysis(timestamps, values, ext_params: ExtremeParams,
-                  chg_params: ChangeParams, weights: MaterialityWeights) -> AnalysisResult:
+                  chg_params: ChangeParams, weights: MaterialityWeights, gap_times=None) -> AnalysisResult:
+    """gap_times (optional): the true UTC time of each reading (e.g. from a
+    "Timestamp (UTC)" column). Gaps are then measured on it, so a daylight-saving
+    clock change in the local time is never mistaken for a gap."""
     x = pd.Series(values, index=pd.Index(timestamps, name="Timestamp"), dtype="float64")
 
-    extreme_df = extreme_channel(x, ext_params)
+    # readings that come too long after the previous one are removed: they are
+    # not in any calculation and not in the results
+    gap_index = x.index
+    if gap_times is not None and len(gap_times) == len(x):
+        gap_index = pd.DatetimeIndex(pd.to_datetime(list(gap_times), utc=True)).tz_localize(None)
+    gap_min, skip, gap_note = time_gaps(gap_index, ext_params.max_gap_minutes)
+    keep = ~skip.to_numpy()
+    xk = x[keep]
+
+    extreme_df = extreme_channel(xk, ext_params)
     persistence_df = persistence_state_machine(extreme_df["ZScore"], extreme_df["ExtremeFlag"], ext_params)
-    change_df = change_channel(x, chg_params)
+    change_df = change_channel(xk, chg_params)
     material_df = materiality(extreme_df, persistence_df, change_df, ext_params, weights)
 
-    table = pd.concat(
-        [x.rename("Value"), extreme_df, persistence_df, change_df, material_df], axis=1
-    )
+    table = pd.concat([xk.rename("Value"), extreme_df, persistence_df, change_df, material_df], axis=1)
+    table["TimeGap_min"] = gap_min.round(2).to_numpy()[keep]
     table.reset_index(inplace=True)
 
     summary = {
         "row_count": int(len(table)),
+        "readings_in_file": int(len(x)),
         "baseline_method": ext_params.baseline_method,
         "extreme_periods": int(extreme_df["ExtremeFlag"].sum()),
         "persistent_periods": int((persistence_df["State"] == "Persistent").sum()),
@@ -328,6 +372,9 @@ def run_analysis(timestamps, values, ext_params: ExtremeParams,
         "material_extreme_periods": int(material_df["MaterialExtremeFlag"].sum()),
         "abnormal_change_periods": int(change_df["AbnormalChangeFlag"].sum()),
         "material_change_periods": int(material_df["MaterialChangeFlag"].sum()),
+        "max_gap_minutes": float(ext_params.max_gap_minutes),
+        "skipped_readings": int(skip.sum()),
+        "max_gap_note": gap_note,
         "max_abs_zscore": float(np.nanmax(np.abs(extreme_df["ZScore"]))) if len(extreme_df) else None,
     }
-    return AnalysisResult(table=table, summary=summary)
+    return AnalysisResult(table=table, summary=summary, keep=keep, gap_minutes=gap_min.to_numpy())

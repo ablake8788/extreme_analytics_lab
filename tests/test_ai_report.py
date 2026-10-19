@@ -47,7 +47,8 @@ def results_csv() -> str:
     s[(t >= "2025-08-09 22:00") & (t < "2025-08-10 07:00")] = 72.6  # cold night
     s = s[~((t >= "2025-08-06 10:00") & (t < "2025-08-06 22:00"))]      # data gap
     s = (s / 0.28).round() * 0.28
-    r = run_analysis(list(s.index), list(s.values), ExtremeParams(window=20), ChangeParams(), MaterialityWeights())
+    r = run_analysis(list(s.index), list(s.values), ExtremeParams(window=20, max_gap_minutes=0),  # keep every reading
+                     ChangeParams(), MaterialityWeights())
     tb = r.table.copy()
     tb["Day/Night"] = np.where((tb["Timestamp"].dt.hour >= 7) & (tb["Timestamp"].dt.hour < 19), "Day", "Night")
     return tb.to_csv(index=False)
@@ -336,3 +337,27 @@ def test_open_uses_short_temp_folder(monkeypatch, tmp_path, csv_text):
     monkeypatch.setattr(_os, "startfile", lambda p: opened.append(p), raising=False)
     assert client.post(f"/api/ai-report/open/{d['token']}").status_code == 200
     assert opened[0].startswith(tempfile.gettempdir()) and opened[0].endswith(d["filename"])
+
+
+def test_ai_report_accepts_a_saved_results_xlsx(monkeypatch, tmp_path, csv_text):
+    """'Save results (Excel)...' writes sheet Results with real dates and TRUE/FALSE;
+    loading that file back gives the same facts as the CSV."""
+    from app import create_app
+    from app.routes.ai_report import _read_results
+    monkeypatch.setenv("APP_REPORTS_FOLDER", str(tmp_path / "results"))
+    df = pd.read_csv(io.StringIO(csv_text))
+    df["Timestamp"] = pd.to_datetime(df["Timestamp"])
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as xw:
+        df.to_excel(xw, sheet_name="Results", index=False)
+        pd.DataFrame({"Item": ["Rows"], "Value": [len(df)]}).to_excel(xw, sheet_name="About", index=False)
+    back = _read_results("results_Test_20250801-20250814.xlsx", buf.getvalue())
+    assert len(back) == len(df) and back["ExtremeFlag"].dtype == bool
+    f_csv = facts_of(csv_text)
+    f_xlsx = compute_facts(back, "Test Building, AHU 1", "°F", "res.xlsx")
+    assert f_xlsx["readings"] == f_csv["readings"] and f_xlsx["data_gaps"] == f_csv["data_gaps"]
+    client = create_app().test_client()
+    r = client.post("/api/ai-report", data={"file": (io.BytesIO(buf.getvalue()), "results.xlsx"),
+                                            "location": "Test Building, AHU 1", "units": "°F"},
+                    content_type="multipart/form-data")
+    assert r.status_code == 200, r.get_json()

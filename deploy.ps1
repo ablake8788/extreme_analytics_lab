@@ -87,17 +87,28 @@ if (-not $SkipServer) {
     $z = [IO.Compression.ZipFile]::OpenRead((Resolve-Path $zip))
     $names = $z.Entries | ForEach-Object { $_.FullName -replace '\\', '/' }
     $z.Dispose()
-    foreach ($need in @("app/services/report_xlsx.py", "app/services/report_xlsx_charts.py", "app/routes/ai_report.py", "app/static/js/ai_report.js")) {
+    foreach ($need in @("app/services/report_xlsx.py", "app/services/report_xlsx_charts.py", "app/routes/ai_report.py", "app/static/js/ai_report.js", "app/static/js/reset.js")) {
         if (-not ($names -contains $need)) { Fail "$need is not in $zip." }
     }
     if ($names | Where-Object { $_ -like "*config.local.ini" }) { Fail "$zip contains config.local.ini - it must never be uploaded." }
-    Ok ("Package OK: deploy_package\ ({0:N0} KB zip), Excel report code included." -f ((Get-Item $zip).Length / 1KB))
+    Ok ("Package OK: deploy_package\ ({0:N0} KB zip), Excel report + Reset button included." -f ((Get-Item $zip).Length / 1KB))
     # one-file copy for the unzip folder: deploy_package_YYYYMMDD-HHMM.zip (extreme_server.zip + deploy_windows_server.ps1)
     if ($ZipFolder) {
         if (-not (Test-Path $ZipFolder)) { New-Item -ItemType Directory -Force $ZipFolder | Out-Null }
         $stamp = Get-Date -Format "yyyyMMdd-HHmm"
         $copy = Join-Path $ZipFolder "deploy_package_$stamp.zip"
-        Compress-Archive -Path "deploy_package\*" -DestinationPath $copy -Force
+        # Dropbox can lock the fresh zip for a few seconds: copy to a temp folder first (with retries), zip from there
+        $tmp = Join-Path $env:TEMP "eal_deploy_package"
+        Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force $tmp | Out-Null
+        $copied = $false
+        for ($i = 1; $i -le 10 -and -not $copied; $i++) {
+            try { Copy-Item "deploy_package\*" $tmp -Force -ErrorAction Stop; $copied = $true }
+            catch { Write-Host "  file busy (Dropbox?) - retry $i of 10 ..." -ForegroundColor DarkYellow; Start-Sleep -Seconds 3 }
+        }
+        if (-not $copied) { Fail "Could not read deploy_package\ (locked). Pause Dropbox and run again." }
+        Compress-Archive -Path "$tmp\*" -DestinationPath $copy -Force -ErrorAction Stop
+        Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
         Ok "Copy saved: $copy"
     }
 }

@@ -341,6 +341,7 @@ COLUMN_DESCRIPTOR = [
     ("RollingStdDev", "σ used for the limits", "Method, Window", "Extreme"),
     ("State", "Normal, Extreme triggered, Extreme/elevated, Persistent, Confirmed/Materialized Shift, Persistence ends",
      "K_E, K_P, N_P, N_M, K_M, N_EXIT", "Persistence"),
+    ("TimeGap_min", "Minutes since the previous reading in the file (readings after a gap > Max time gap are removed)", "Max time gap (min)", "Data quality"),
     ("UpperLimit", "Upper edge of the normal range: MA + K_E·σ", "Method, Window, K_E", "Extreme"),
     ("ZScore", "(Value − MA) / σ", "Method, Window", "Extreme"),
     ("Day/Night", "Day or night category of the reading", "time of day", "Input"),

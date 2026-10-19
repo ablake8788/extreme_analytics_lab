@@ -46,3 +46,7 @@ extreme_server.zip
 
 # AI reports contain sensor data
 results/
+deploy_package/
+
+# Seed data made from export files (sensor data)
+upstream/seed/

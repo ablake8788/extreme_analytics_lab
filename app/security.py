@@ -132,14 +132,20 @@ def _password_ok(given: str) -> bool:
     return hmac.compare_digest(given.encode("utf-8"), s.password.encode("utf-8"))
 
 
-def _render_login(nxt: str, error: str = "", status: int = 200, detail: str = "") -> Response:
+# The sign-in page has a User name field, but for now only the password is
+# checked: whatever is typed there, the signed-in user is DEFAULT_USER.
+DEFAULT_USER = "Artak"
+
+
+def _render_login(nxt: str, error: str = "", status: int = 200, detail: str = "", user: str = "") -> Response:
     # The form carries its own signed, time-limited token, so it does not
     # depend on a cookie surviving between showing and submitting the form.
     token = _form_signer().dumps(secrets.token_hex(8))
     extra = f'<p class="err" role="alert">{escape(error)}</p>' if error else ""
     if detail:
         extra += f'<p class="detail">{escape(detail)}</p>'
-    html = _LOGIN_HTML.replace("{{csrf}}", token).replace("{{next}}", escape(nxt)).replace("{{error}}", extra)
+    html = (_LOGIN_HTML.replace("{{csrf}}", token).replace("{{next}}", escape(nxt))
+            .replace("{{user}}", escape((user or DEFAULT_USER)[:80])).replace("{{error}}", extra))
     return Response(html, status=status, mimetype="text/html")
 
 
@@ -149,25 +155,27 @@ def _login_view():
         return redirect(nxt)
     if request.method != "POST":
         return _render_login(nxt)
+    typed = request.form.get("username", "").strip()      # shown again on errors; not checked yet
     wait = _locked_for()
     if wait:
-        return _render_login(nxt, f"Too many attempts. Try again in {max(1, round(wait / 60))} minute(s).", 401)
+        return _render_login(nxt, f"Too many attempts. Try again in {max(1, round(wait / 60))} minute(s).", 401, user=typed)
     try:
         _form_signer().loads(request.form.get("csrf", ""), max_age=FORM_MAX_AGE)
     except SignatureExpired:
-        return _render_login(nxt, "The form expired. Please try again.", 401)
+        return _render_login(nxt, "The form expired. Please try again.", 401, user=typed)
     except BadSignature:
-        return _render_login(nxt, "The form was not valid. Please try again.", 401)
+        return _render_login(nxt, "The form was not valid. Please try again.", 401, user=typed)
     if _password_ok(request.form.get("password", "")):
         session.clear()
         session.permanent = True
         session["tal_auth"] = True
+        session["tal_user"] = DEFAULT_USER                # the typed user name is ignored for now
         _failures.pop(_client(), None)
         # Confirm the browser really kept the sign-in before going on.
         return redirect("/login/check?next=" + nxt)
     _failures.setdefault(_client(), []).append(time.time())
     time.sleep(0.4)
-    return _render_login(nxt, "That password is not correct.", 401)
+    return _render_login(nxt, "That password is not correct.", 401, user=typed)
 
 
 def _login_check_view():
@@ -235,9 +243,10 @@ _LOGIN_HTML = """<!doctype html>
   form { width:100%; max-width:380px; background:#fff; border:1px solid var(--line); border-radius:6px; padding:28px; }
   h1 { font:600 21px Bahnschrift,"Segoe UI",Arial,sans-serif; margin:0 0 4px; }
   p.sub { margin:0 0 20px; color:var(--muted); font-size:13.5px; }
+  label + input + label, input + label { margin-top:14px; }
   label { display:block; font-size:12.5px; font-weight:600; color:#3a4753; margin-bottom:6px; }
-  input[type=password] { width:100%; height:40px; padding:0 12px; border:1px solid var(--line); border-radius:6px; font:inherit; font-size:15px; }
-  input[type=password]:focus { outline:none; border-color:var(--signal); box-shadow:0 0 0 3px rgba(47,111,237,.18); }
+  input[type=password], input[type=text] { width:100%; height:40px; padding:0 12px; border:1px solid var(--line); border-radius:6px; font:inherit; font-size:15px; }
+  input[type=password]:focus, input[type=text]:focus { outline:none; border-color:var(--signal); box-shadow:0 0 0 3px rgba(47,111,237,.18); }
   button { margin-top:16px; width:100%; height:42px; border:0; border-radius:6px; background:var(--signal); color:#fff;
            font:600 15px "Segoe UI",Arial,sans-serif; cursor:pointer; }
   button:hover { background:#2159c9; }
@@ -249,8 +258,10 @@ _LOGIN_HTML = """<!doctype html>
 <main>
 <form method="post" action="/login">
   <h1>Sign in</h1>
-  <p class="sub">Enter the access password to continue.</p>
+  <p class="sub">Enter your user name and the access password to continue.</p>
   {{error}}
+  <label for="username">User name</label>
+  <input type="text" id="username" name="username" value="{{user}}" autocomplete="username" maxlength="80" spellcheck="false">
   <label for="password">Password</label>
   <input type="password" id="password" name="password" autocomplete="current-password" required autofocus>
   <input type="hidden" name="csrf" value="{{csrf}}">

@@ -14,8 +14,18 @@ $('uploadBtn').onclick = async () => {
     const res = await fetch('/api/upload', { method: 'POST', body: fd });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
+    window.TAL_SOURCE_LABEL = '';
+    onDataLoaded(data, $('uploadStatus'));
+  } catch (e) {
+    $('uploadStatus').textContent = e.message;
+  }
+};
+
+// Shared by Upload and Live system (source.js): the token and columns of the loaded data.
+function onDataLoaded(data, statusEl) {
     currentToken = data.token;
-    $('uploadStatus').textContent = `Loaded "${data.filename}" — ${data.row_count} row(s).`;
+    window.TAL_SOURCE_NAME = data.filename || '';     // name of the uploaded file (or live point), for exports
+    (statusEl || $('uploadStatus')).textContent = `Loaded "${data.filename}" — ${data.row_count} row(s).`;
 
     const sheetRow = $('sheetRow');
     if (data.sheets && data.sheets.length) {
@@ -35,10 +45,8 @@ $('uploadBtn').onclick = async () => {
     $('columnsPanel').style.display = 'block';
     $('paramsPanel').style.display = 'block';
     $('resultsPanel').style.display = 'none';
-  } catch (e) {
-    $('uploadStatus').textContent = e.message;
-  }
-};
+}
+window.onDataLoaded = onDataLoaded;
 
 $('sheetSelect')?.addEventListener('change', async () => {
   const sheet = $('sheetSelect').value;
@@ -85,6 +93,7 @@ $('analyzeBtn').onclick = async () => {
     roc_k: $('rocK').value,
     frequency_window: $('frequencyWindow').value,
     frequency_min_count: $('frequencyMinCount').value,
+    max_gap_minutes: $('maxGapMinutes') ? $('maxGapMinutes').value : '',
     w_magnitude: $('wMagnitude').value,
     w_duration: $('wDuration').value,
     w_frequency: $('wFrequency').value,
@@ -126,9 +135,11 @@ function renderResults(data) {
     ['Abnormal changes', s.abnormal_change_periods],
     ['Material changes', s.material_change_periods],
   ];
+  if (s.skipped_readings !== undefined) items.push(['Removed (time gap > ' + s.max_gap_minutes + ' min)', s.skipped_readings]);
   $('summaryGrid').innerHTML = items.map(([label, value]) =>
     `<div class="summary-item"><div class="label">${label}</div><div class="value">${value}</div></div>`
-  ).join('');
+  ).join('') + (s.max_gap_note && s.max_gap_note !== 'Max time gap is off.'
+    ? `<div class="summary-item" style="grid-column:1/-1"><div class="label">Max time gap</div><div class="value" style="font-size:13px;font-weight:500">${s.max_gap_note}</div></div>` : '');
 
   const rows = data.rows;
   const tbody = document.querySelector('#resultsTable tbody');

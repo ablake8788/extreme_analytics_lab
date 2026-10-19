@@ -39,6 +39,7 @@ class Config:
     ROC_K = _ini.getfloat("defaults", "roc_k", fallback=2.0)
     FREQUENCY_WINDOW = _ini.getint("defaults", "frequency_window", fallback=10)
     FREQUENCY_MIN_COUNT = _ini.getint("defaults", "frequency_min_count", fallback=2)
+    MAX_GAP_MINUTES = _ini.getfloat("defaults", "max_gap_minutes", fallback=30.0)
 
     W_MAGNITUDE = _ini.getfloat("defaults", "w_magnitude", fallback=0.4)
     W_DURATION = _ini.getfloat("defaults", "w_duration", fallback=0.4)

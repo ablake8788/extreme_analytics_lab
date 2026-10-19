@@ -1,7 +1,7 @@
 /*
  * ai_report.js - "AI report" panel for the Extreme & Change Analytics Lab.
  *
- *   Save results CSV...            Save As dialog, you choose folder and name
+ *   Save results (Excel)...        Save As dialog, you choose folder and name (.xlsx)
  *   Generate AI report (Word)      the app computes the facts, reads the reference
  *   Generate AI report (Excel)     document and asks OpenAI for the wording, then
  *   Generate both                  builds the .docx and/or the .xlsx workbook
@@ -38,7 +38,7 @@
     const remembered = (() => { try { return localStorage.getItem(LS_KEY) || ''; } catch (e) { return ''; } })();
     if (remembered) return remembered;
     const fi = document.getElementById('fileInput');
-    const file = fi && fi.files && fi.files[0] ? fi.files[0].name.replace(/\.[^.]+$/, '').replace(/_/g, ' ') : '';
+    const file = (fi && fi.files && fi.files[0] ? fi.files[0].name.replace(/\.[^.]+$/, '').replace(/_/g, ' ') : '') || (window.TAL_SOURCE_LABEL || '');
     const sel = document.getElementById('valueColumn');
     const col = sel && sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex].text.replace(/\s*\[[^\]]*\]\s*/, '') : '';
     return [file, col].filter(Boolean).join(', ') || 'Sensor';
@@ -57,6 +57,12 @@
       return /[",\r\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
     };
     return '\ufeff' + [cols.join(',')].concat(list.map((r) => cols.map((k) => cell(r[k])).join(','))).join('\r\n');
+  }
+
+  function orderedColumns(list) {
+    const keys = Object.keys(list[0]);
+    const lead = ['Timestamp', 'Value'];
+    return lead.filter((k) => keys.includes(k)).concat(keys.filter((k) => !lead.includes(k)));
   }
 
   function chosenRows() {
@@ -151,16 +157,19 @@
     const list = chosenRows();
     if (!list || !list.length) { status('Run an analysis first.', 'error'); return; }
     const loc = $('[data-ar=location]').value.trim();
-    const name = `results_${safe(loc)}_${ymd(list[0].Timestamp)}-${ymd(list[list.length - 1].Timestamp)}.csv`;
+    const name = `results_${safe(loc)}_${ymd(list[0].Timestamp)}-${ymd(list[list.length - 1].Timestamp)}.xlsx`;
     try {
-      const r = await saveAs(name, 'csv', async () => new Blob([rowsToCsv(list)], { type: 'text/csv;charset=utf-8' }));
+      const r = await saveAs(name, 'xlsx', () => window.XlsxExport.fromRecords(list, { columns: orderedColumns(list), sheetName: 'Results',
+        about: [['Exported', new Date().toLocaleString()], ['Location', loc || 'Sensor'], ['Rows', list.length],
+                ['From', String(list[0].Timestamp)], ['To', String(list[list.length - 1].Timestamp)],
+                ['Use', 'Can be loaded again in the AI report panel: "A saved results file"']] }));
       if (r) {
         const kb = Math.max(1, Math.round(r.size / 1024)).toLocaleString();
         status(`Saved <b>${esc(r.name)}</b> (${list.length.toLocaleString()} rows, ${kb} KB)` +
                `${r.dialog ? '' : ' to your Downloads folder'}.` + (r.warning ? `<br>${esc(r.warning)}` : ''), r.warning ? undefined : 'ok');
       }
     } catch (e) {
-      status(`Could not save the CSV: ${esc(e.message || e)}`, 'error');
+      status(`Could not save the Excel file: ${esc(e.message || e)}`, 'error');
     }
   }
 
@@ -175,7 +184,7 @@
 
     let csvBlob, csvName;
     if (source === 'file') {
-      if (!savedCsvFile) { status('Choose a results CSV file first.', 'error'); return; }
+      if (!savedCsvFile) { status('Choose a saved results file (Excel or CSV) first.', 'error'); return; }
       csvBlob = savedCsvFile; csvName = savedCsvFile.name;
     } else {
       const list = chosenRows();
@@ -341,14 +350,14 @@
           <select id="arSource" data-ar="source">
             <option value="all">All results of this analysis</option>
             <option value="page">Current chart page only</option>
-            <option value="file">A saved results CSV file...</option>
+            <option value="file">A saved results file (Excel or CSV)...</option>
           </select></div>
       </div>
       <div class="ar-file" data-ar="filebox" style="display:none;margin:10px 0 0">
-        <input type="file" accept=".csv" data-ar="file"> <span class="muted" data-ar="filename"></span>
+        <input type="file" accept=".xlsx,.csv" data-ar="file"> <span class="muted" data-ar="filename"></span>
       </div>
       <div class="row ar-buttons" style="margin-top:14px;gap:10px">
-        <button type="button" data-ar="savecsv" class="ar-secondary">Save results CSV...</button>
+        <button type="button" data-ar="savecsv" class="ar-secondary">Save results (Excel)...</button>
         <button type="button" data-ar="generate">Generate AI report (Word)</button>
         <button type="button" data-ar="generatex">Generate AI report (Excel)</button>
         <button type="button" data-ar="generateb" class="ar-secondary">Generate both</button>

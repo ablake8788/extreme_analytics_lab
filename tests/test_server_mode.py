@@ -123,3 +123,32 @@ def test_tampered_form_token_rejected(monkeypatch):
     c = server_client(monkeypatch)
     r = c.post("/login", data={"password": "s3cret-pass", "csrf": "forged", "next": "/"})
     assert r.status_code == 401 and b"not valid" in r.data
+
+
+def test_login_page_has_user_name_field_with_artak(monkeypatch):
+    c = server_client(monkeypatch)
+    page = c.get("/login").data.decode()
+    assert 'name="username"' in page and 'value="Artak"' in page
+    assert page.index('name="username"') < page.index('name="password"')
+
+
+def test_any_user_name_signs_in_as_artak_for_now(monkeypatch):
+    import re
+    c = server_client(monkeypatch)
+    page = c.get("/login").data.decode()
+    token = re.search(r'name="csrf" value="([^"]+)"', page).group(1)
+    r = c.post("/login", data={"username": "someone else", "password": "s3cret-pass", "csrf": token, "next": "/"})
+    assert r.status_code == 302
+    with c.session_transaction() as s:
+        assert s["tal_auth"] is True and s["tal_user"] == "Artak"
+
+
+def test_wrong_password_keeps_the_typed_user_name(monkeypatch):
+    import re
+    c = server_client(monkeypatch)
+    page = c.get("/login").data.decode()
+    token = re.search(r'name="csrf" value="([^"]+)"', page).group(1)
+    r = c.post("/login", data={"username": "Maria <b>", "password": "wrong", "csrf": token, "next": "/"})
+    body = r.data.decode()
+    assert r.status_code == 401 and "That password is not correct." in body
+    assert 'value="Maria &lt;b&gt;"' in body                      # shown again, safely escaped

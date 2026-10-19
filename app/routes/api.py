@@ -5,6 +5,8 @@ import pandas as pd
 from flask import Blueprint, request, jsonify
 from app.config import Config
 from app.services.data_loader import read_table, read_sheet, list_sheets, column_names, extract_series, DataLoadError
+from app.services.data_loader import last_meta, last_extras, set_extras
+import numpy as np
 from app.services.extreme_change_engine import (
     ExtremeParams, ChangeParams, MaterialityWeights, run_analysis,
 )
@@ -64,6 +66,14 @@ def columns():
     return jsonify({"columns": column_names(df)})
 
 
+def _max_gap(value) -> float:
+    """Max time gap in minutes; blank or negative means off (0)."""
+    if value is None or str(value).strip() == "":
+        return 0.0
+    v = float(value)
+    return v if v > 0 else 0.0
+
+
 def _load_series_and_params(data: dict):
     """Shared by /analyze and /report: resolves the upload, reads the
     chosen column as a series, and builds the three parameter objects from
@@ -95,6 +105,7 @@ def _load_series_and_params(data: dict):
         n_exit=int(data.get("n_exit", Config.N_EXIT)),
         percentile_p=float(data.get("percentile_p", Config.PERCENTILE_P)),
         k_iqr=float(data.get("k_iqr", Config.K_IQR)),
+        max_gap_minutes=_max_gap(data.get("max_gap_minutes", Config.MAX_GAP_MINUTES)),
     )
     chg_params = ChangeParams(
         roc_window=int(data.get("roc_window", Config.ROC_WINDOW)),
@@ -112,12 +123,60 @@ def _load_series_and_params(data: dict):
     return timestamps, values, ext_params, chg_params, weights, os.path.basename(str(path))
 
 
+def _gap_times():
+    """True UTC time of each reading (from an epoch column such as Timestamp (UTC)), or None."""
+    meta = last_meta() or {}
+    secs = meta.get("utc_seconds")
+    return pd.to_datetime(secs, unit="s", utc=True) if secs else None
+
+
+def _gaps_payload(timestamps, values, result, ext_params) -> tuple[dict | None, list]:
+    """One item per reading removed by Max time gap (the reading before and the
+    removed reading after the gap, side by side), and the removed readings as
+    listing rows. Also keeps the Day/Night columns aligned with the kept rows."""
+    keep = result.keep
+    if keep is None or keep.all():
+        return None, []
+    meta = last_meta() or {}
+    src = meta.get("source_rows") or [None] * len(values)
+    ctx = meta.get("context") or {}
+    gm = result.gap_minutes
+    steps = gm[np.isfinite(gm)]
+    interval = max(1, int(round(float(np.median(steps))))) if len(steps) else 15
+    extras = last_extras() or {}
+    removed_pos = np.flatnonzero(~keep)
+    items, removed = [], []
+    for n, i in enumerate(removed_pos, start=1):
+        b = i - 1
+        g = float(gm[i])
+        item = {"Gap #": n,
+                "Before timestamp": str(timestamps[b]), "Before value": float(values[b]), "Before source row": src[b],
+                "After timestamp": str(timestamps[i]), "After value": float(values[i]), "After source row": src[i],
+                "Gap minutes": round(g, 2), "Gap hours": round(round(g, 2) / 60, 4),
+                f"Est. missing {interval}-min readings": int(g // interval)}
+        for c, vals in ctx.items():
+            item[f"Before: {c}"] = vals[b]
+        for c, vals in ctx.items():
+            item[f"After: {c}"] = vals[i]
+        items.append(item)
+        row = {"Timestamp": str(timestamps[i]), "Value": float(values[i]), "State": "Removed (time gap)",
+               "TimeGap_min": round(g, 2)}
+        row.update({c: v[i] for c, v in extras.items() if len(v) == len(values)})
+        removed.append(row)
+    if extras:   # the listing's Day/Night columns must match the kept rows only
+        set_extras({c: [x for x, k in zip(v, keep) if k] for c, v in extras.items() if len(v) == len(values)})
+    gaps = {"min_gap_minutes": float(ext_params.max_gap_minutes), "interval_minutes": interval,
+            "measured_on": "UTC" if meta.get("utc_seconds") else "local time",
+            "columns": list(items[0].keys()) if items else [], "items": items}
+    return gaps, removed
+
+
 @api_bp.post("/analyze")
 def analyze():
     data = request.get_json(force=True)
     try:
         timestamps, values, ext_params, chg_params, weights, _ = _load_series_and_params(data)
-        result = run_analysis(timestamps, values, ext_params, chg_params, weights)
+        result = run_analysis(timestamps, values, ext_params, chg_params, weights, gap_times=_gap_times())
     except DataLoadError as exc:
         return jsonify({"error": str(exc)}), 400
     except (KeyError, ValueError, TypeError) as exc:
@@ -131,8 +190,10 @@ def analyze():
             )
     records = table.to_dict(orient="records")
     records = [_clean_record(r) for r in records]
+    gaps, removed = _gaps_payload(timestamps, values, result, ext_params)
 
-    return jsonify({"summary": result.summary, "rows": records})
+    return jsonify({"summary": result.summary, "rows": records, "gaps": gaps,
+                    "removed_rows": [_clean_record(r) for r in removed]})
 
 
 @api_bp.post("/report")
@@ -143,7 +204,7 @@ def report():
     data = request.get_json(force=True)
     try:
         timestamps, values, ext_params, chg_params, weights, filename = _load_series_and_params(data)
-        result = run_analysis(timestamps, values, ext_params, chg_params, weights)
+        result = run_analysis(timestamps, values, ext_params, chg_params, weights, gap_times=_gap_times())
     except DataLoadError as exc:
         return jsonify({"error": str(exc)}), 400
     except (KeyError, ValueError, TypeError) as exc:
@@ -264,3 +325,20 @@ def _dl_add_category_columns(response):
     finally:
         _dl_reset_extras()
     return response
+
+
+# === FULL RESET (Reset button) ===============================================
+@api_bp.post("/reset")
+def reset_session():
+    """Forget this browser's work: delete its uploaded file (and nothing else).
+    The page then reloads with every field back to its default."""
+    data = request.get_json(silent=True) or {}
+    removed = []
+    path = _resolve_path(str(data.get("token") or ""))
+    if path and path.is_file():
+        try:
+            path.unlink()
+            removed.append(path.name)
+        except OSError:
+            pass
+    return jsonify({"reset": True, "removed": removed})

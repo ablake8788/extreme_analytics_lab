@@ -127,9 +127,35 @@ def _longest_run(table: pd.DataFrame, state_set: set) -> tuple:
     return best_len, best_start, best_end
 
 
+def _max_gap_finding(ext_params, summary: dict) -> str:
+    """One sentence for Findings on what Max time gap did to the data."""
+    gap = float(getattr(ext_params, "max_gap_minutes", 0) or 0)
+    if gap <= 0:
+        return "Max time gap is off: every reading in the file was used in the calculations."
+    note = (summary or {}).get("max_gap_note") or ""
+    if note:
+        return note.replace("Max time gap not applied:", f"Max time gap ({gap:g} min) was not applied:") \
+               + " Every reading in the file was used."
+    removed = int((summary or {}).get("skipped_readings") or 0)
+    used = int((summary or {}).get("row_count") or 0)
+    total = int((summary or {}).get("readings_in_file") or used + removed)
+    if removed == 0:
+        return (f"Max time gap ({gap:g} min): no reading came more than {gap:g} min after the previous one, "
+                f"so all {total:,} readings were used.")
+    pct = removed / total * 100 if total else 0
+    return (f"Max time gap ({gap:g} min): {removed:,} reading(s) ({pct:.2f}%) came more than {gap:g} min after "
+            f"the previous reading and were removed from all calculations and results; "
+            f"the analysis used {used:,} of {total:,} readings.")
+
+
 def generate_findings(table: pd.DataFrame, summary: dict, ext_params, chg_params) -> list:
     findings = []
     n = summary["row_count"]
+
+    # Data basis: Max time gap
+    gap_finding = _max_gap_finding(ext_params, summary)
+    if gap_finding:
+        findings.append(gap_finding)
 
     # Extreme channel
     ext_pct = (summary["extreme_periods"] / n * 100) if n else 0
@@ -254,6 +280,19 @@ def generate_recommendations(summary: dict, ext_params, chg_params) -> list:
 # Full report assembly
 # --------------------------------------------------------------------------
 
+def _max_gap_text(ext_params, summary: dict) -> str:
+    """Max time gap for the Configuration table: the setting and what it did."""
+    gap = float(getattr(ext_params, "max_gap_minutes", 0) or 0)
+    if gap <= 0:
+        return "off - all readings used"
+    note = (summary or {}).get("max_gap_note") or ""
+    if note:
+        return f"{gap:g} min - " + note.replace("Max time gap not applied: ", "not applied: ")
+    n = int((summary or {}).get("skipped_readings") or 0)
+    return (f"{gap:g} min - {n:,} reading(s) after a longer gap removed from all calculations"
+            if n else f"{gap:g} min - no gap was longer, all readings used")
+
+
 def generate_markdown_report(table: pd.DataFrame, summary: dict, ext_params, chg_params,
                               value_column: str, source_filename: str = "") -> str:
     findings = generate_findings(table, summary, ext_params, chg_params)
@@ -279,6 +318,7 @@ def generate_markdown_report(table: pd.DataFrame, summary: dict, ext_params, chg
     lines.append(f"| K_M | {ext_params.k_m} |")
     lines.append(f"| ROC window / baseline window | {chg_params.roc_window} / {chg_params.roc_baseline_window} |")
     lines.append(f"| ROC_K | {chg_params.roc_k} |")
+    lines.append(f"| Max time gap | {_max_gap_text(ext_params, summary)} |")
     lines.append("")
     lines.append("![Time series with detection overlay](chart.png)")
     lines.append("")
@@ -289,6 +329,8 @@ def generate_markdown_report(table: pd.DataFrame, summary: dict, ext_params, chg
     lines.append("| Metric | Value |")
     lines.append("|---|---|")
     for k, v in summary.items():
+        if k == "max_gap_note":          # shown with Max time gap in the Configuration table
+            continue
         label = k.replace("_", " ").title()
         lines.append(f"| {label} | {v} |")
     lines.append("")

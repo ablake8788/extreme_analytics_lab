@@ -19,11 +19,27 @@
 <main>
   <section class="panel">
     <h2>1. Upload data</h2>
-    <div class="row">
-      <input type="file" id="fileInput" accept=".csv,.xlsx,.xlsm">
-      <button id="uploadBtn">Upload</button>
+    <div class="source-toggle" role="radiogroup" aria-label="Data source">
+      <label><input type="radio" name="dataSource" value="file" checked> Upload file</label>
+      <label><input type="radio" name="dataSource" value="live"> Live system <span class="muted-inline">(ScyllaDB metadata + InfluxDB readings)</span></label>
     </div>
-    <p id="uploadStatus" class="muted"></p>
+    <div id="fileSource">
+      <div class="row">
+        <input type="file" id="fileInput" accept=".csv,.xlsx,.xlsm">
+        <button id="uploadBtn">Upload</button>
+      </div>
+      <p id="uploadStatus" class="muted"></p>
+    </div>
+    <div id="liveSource" style="display:none">
+      <div class="controls">
+        <div><label for="liveSite">Site</label><select id="liveSite"><option value="">Loading…</option></select></div>
+        <div><label for="livePoint">Point</label><select id="livePoint"></select></div>
+        <div><label for="liveFrom">From</label><input type="date" id="liveFrom"></div>
+        <div><label for="liveTo">To (included)</label><input type="date" id="liveTo"></div>
+      </div>
+      <div class="row" id="liveButtons"><button id="liveLoadBtn">Load data</button></div>
+      <p id="liveStatus" class="muted"></p>
+    </div>
     <div id="sheetRow" class="row" style="display:none">
       <div>
         <label for="sheetSelect">Sheet</label>
@@ -88,6 +104,7 @@
       <div><label for="rocK">ROC_K — abnormal |Z_ROC| threshold</label><input type="number" id="rocK" value="{{ defaults.ROC_K }}" step="0.1"></div>
       <div><label for="frequencyWindow">Frequency window</label><input type="number" id="frequencyWindow" value="{{ defaults.FREQUENCY_WINDOW }}" min="1"></div>
       <div><label for="frequencyMinCount">Min recurrences to be material</label><input type="number" id="frequencyMinCount" value="{{ defaults.FREQUENCY_MIN_COUNT }}" min="1"></div>
+      <div><label for="maxGapMinutes">Max time gap (min) — remove reading if longer</label><input type="number" id="maxGapMinutes" value="{{ '%g' % defaults.MAX_GAP_MINUTES }}" min="0" step="1" title="If a reading comes more than this many minutes after the previous reading, it is removed: not in any calculation (baseline, Extreme, persistence, change, score) and not in the results or reports. The next reading is checked against its own previous reading. 0 = off."></div>
     </div>
 
     <details>
@@ -138,10 +155,13 @@
 </main>
 <footer>Extreme &amp; Change Analytics Lab &middot; Implements the Consolidated Standardized Time-Series Analytics Framework.</footer>
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/xlsx_export.js') }}"></script>
   <script src="{{ url_for('static', filename='js/ai_report.js') }}"></script>
   <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
   <script src="{{ url_for('static', filename='js/data_listing.js') }}"></script>
   <script src="{{ url_for('static', filename='js/build_badge.js') }}"></script>
   <script src="{{ url_for('static', filename='js/chart_explorer.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/reset.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/source.js') }}"></script>
 </body>
 </html>

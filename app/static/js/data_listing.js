@@ -114,7 +114,7 @@
           <button data-dl="last" title="Last page">&#x23ED;</button>
         </div>
         <div class="dl-group"><span class="dl-lbl">Go to date</span><input type="text" data-dl="find" placeholder="2026-01-15 08:00"><button data-dl="go">Go</button></div>
-        <div class="dl-group"><button data-dl="csv" title="Save the filtered rows as CSV">Export filtered (CSV)</button></div>
+        <div class="dl-group"><button data-dl="csv" title="Save the filtered rows as an Excel file">Export filtered (Excel)</button></div>
       </div>
       <div class="dl-wrap"><table><thead data-dl="head"></thead><tbody data-dl="body"></tbody></table></div>
       <div class="dl-foot"><span data-dl="count"></span>
@@ -309,22 +309,61 @@
     if (tr) { tr.style.outline = '2px solid #2f6fed'; tr.scrollIntoView({ block: 'center' }); }
   }
 
-  function exportCsv() {
+  async function exportCsv() {   // saves an Excel workbook (.xlsx) - name kept for the button wiring
     if (!S.filtered.length) return;
     const first = S.rows[0];
     const keys = Object.keys(first);
     const lead = ['Timestamp', ...S.cats, 'Value'];
     const cols = lead.filter((k) => keys.includes(k)).concat(keys.filter((k) => !lead.includes(k)));
-    const cell = (v) => {
-      if (v === null || v === undefined) return '';
-      const t = String(v);
-      return /[",\r\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
-    };
-    const lines = [cols.join(',')].concat(S.filtered.map((i) => cols.map((k) => cell(S.rows[i][k])).join(',')));
+    // readings removed by Max time gap: in the export (time order), same Day/Night filter, all states only
+    const removed = S.stateFilter === 'all'
+      ? (S.removed || []).filter((r) => S.cats.every((c) => !S.catFilter[c] || S.catFilter[c] === 'All' || r[c] === S.catFilter[c]))
+      : [];
+    let out = S.filtered.map((i) => S.rows[i]);
+    if (removed.length) {
+      if (!cols.includes('TimeGap_min')) cols.push('TimeGap_min');
+      const ts = (r) => String(r.Timestamp ?? '').replace('T', ' ');
+      out = out.concat(removed).sort((a, b) => (ts(a) < ts(b) ? -1 : ts(a) > ts(b) ? 1 : 0));
+    }
+    const source = String(window.TAL_SOURCE_NAME || 'data');
+    const base = source.replace(/\.[A-Za-z0-9]{2,5}$/, '').replace(/[\[\]:*?/\\]+/g, '_');
+    const extra = [];
+    if (S.gaps && S.gaps.items.length) {
+      const g = S.gaps, gm = g.items.map((x) => x['Gap minutes']);
+      const longest = Math.max(...gm);
+      const suffix = ` Gaps ${g.min_gap_minutes}min`;
+      extra.push({ name: base.slice(0, 31 - suffix.length).trim() + suffix, columns: g.columns, rows: g.items });
+      extra.push({ name: 'Gaps Summary', columns: ['Metric', 'Value'], rows: [
+        { Metric: 'Source file', Value: source },
+        { Metric: 'Minimum gap (minutes)', Value: g.min_gap_minutes },
+        { Metric: 'Total qualifying gaps', Value: g.items.length },
+        { Metric: 'Longest gap (minutes)', Value: Math.round(longest * 100) / 100 },
+        { Metric: 'Longest gap (hours)', Value: Math.round(longest / 60 * 100) / 100 },
+        { Metric: 'Gaps measured on', Value: g.measured_on },
+        { Metric: 'Reading interval (minutes)', Value: g.interval_minutes },
+        { Metric: 'Layout', Value: 'One row per gap; before and after side by side. Source row = line in the uploaded file.' },
+        { Metric: 'Note', Value: 'The reading after each gap was removed from all calculations (Max time gap). Gaps cover the whole analysis, not only the listing filter.' },
+      ] });
+    }
     const tag = S.cats.map((c) => S.catFilter[c] && S.catFilter[c] !== 'All' ? S.catFilter[c] : '').filter(Boolean).join('_');
     const stateTag = S.stateFilter === 'all' ? '' : S.stateFilter === 'extremes' ? 'extremes' : S.stateFilter;
-    const name = ['extreme_listing', tag, stateTag].filter(Boolean).join('_').replace(/[^A-Za-z0-9._-]+/g, '_') + '.csv';
-    const url = URL.createObjectURL(new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' }));
+    const name = ['extreme_listing', tag, stateTag].filter(Boolean).join('_').replace(/[^A-Za-z0-9._-]+/g, '_') + '.xlsx';
+    const btn = $q('[data-dl=csv]');
+    const label = btn.textContent;
+    btn.disabled = true; btn.textContent = 'Creating Excel file...';
+    let blob;
+    try {
+      const filters = S.cats.map((c) => [c, S.catFilter[c] || 'All']);
+      blob = await window.XlsxExport.fromRecords(out, { columns: cols, sheetName: 'Listing', extraSheets: extra, about: [
+        ['Exported', new Date().toLocaleString()], ['Source file', source],
+        ['State filter', S.stateFilter === 'all' ? 'All states' : S.stateFilter],
+        ...filters, ['Rows', out.length], ['Analysed rows in the listing', S.filtered.length],
+        ['Removed readings included (State = Removed (time gap))', removed.length],
+        ['Rows before filtering', S.rows.length]] });
+    } finally {
+      btn.disabled = false; btn.textContent = label;
+    }
+    const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 4000);
@@ -348,6 +387,8 @@
     if (!root) buildUI();
     placeUI();
     S.rows = rows;
+    S.removed = Array.isArray(data.removed_rows) ? data.removed_rows : [];   // readings removed by Max time gap
+    S.gaps = data.gaps && Array.isArray(data.gaps.items) ? data.gaps : null;
     S.cats = detectCats(rows, data.category_columns);
     S.cats.forEach((c) => { if (!(c in S.catFilter)) S.catFilter[c] = 'All'; });
     buildFilters();

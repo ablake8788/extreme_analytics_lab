@@ -93,3 +93,45 @@ def test_findings_never_crash_on_zero_confirmed_shifts():
     result = run_analysis(timestamps, values, ext_params, chg_params, MaterialityWeights())
     findings = generate_findings(result.table, result.summary, ext_params, chg_params)
     assert any("confirmed" in f.lower() or "persistent" in f.lower() or "isolated" in f.lower() for f in findings)
+
+
+def _config_row(md: str) -> str:
+    return next(line for line in md.splitlines() if line.startswith("| Max time gap |"))
+
+
+def test_configuration_shows_max_time_gap_and_removed_readings():
+    t = list(pd.date_range("2026-01-01", periods=80, freq="15min"))
+    t += [t[-1] + pd.Timedelta(hours=2)] + [t[-1] + pd.Timedelta(hours=2, minutes=15 * k) for k in range(1, 20)]
+    v = [20.0 + (i % 7) * 0.1 for i in range(len(t))]
+    ext, chg = ExtremeParams(window=10, max_gap_minutes=30), ChangeParams(roc_baseline_window=10)
+    r = run_analysis(t, v, ext, chg, MaterialityWeights())
+    md = generate_markdown_report(r.table, r.summary, ext, chg, "Temp")
+    row = _config_row(md)
+    assert "30 min" in row and "1 reading(s) after a longer gap removed" in row
+    assert md.index("| Max time gap |") < md.index("## 2. Summary Statistics")
+    assert "Max Gap Note" not in md
+
+
+def test_configuration_max_time_gap_off_and_not_applied():
+    r = _sample_result()                                      # daily data
+    ext, chg = ExtremeParams(window=15, max_gap_minutes=0), ChangeParams(roc_baseline_window=15)
+    assert "off - all readings used" in _config_row(generate_markdown_report(r.table, r.summary, ext, chg, "V"))
+    ext30 = ExtremeParams(window=15, max_gap_minutes=30)
+    r30 = run_analysis(pd.date_range("2026-01-01", periods=60, freq="D"), [100.0] * 60, ext30, chg, MaterialityWeights())
+    row = _config_row(generate_markdown_report(r30.table, r30.summary, ext30, chg, "V"))
+    assert "30 min - not applied" in row and "1440 min apart" in row
+
+
+def test_findings_report_max_time_gap():
+    t = list(pd.date_range("2026-01-01", periods=80, freq="15min"))
+    t += [t[-1] + pd.Timedelta(hours=2)] + [t[-1] + pd.Timedelta(hours=2, minutes=15 * k) for k in range(1, 20)]
+    v = [20.0 + (i % 7) * 0.1 for i in range(len(t))]
+    ext, chg = ExtremeParams(window=10, max_gap_minutes=30), ChangeParams(roc_baseline_window=10)
+    r = run_analysis(t, v, ext, chg, MaterialityWeights())
+    first = generate_findings(r.table, r.summary, ext, chg)[0]
+    assert first.startswith("Max time gap (30 min): 1 reading(s)") and "used 99 of 100 readings" in first
+    off = ExtremeParams(window=10, max_gap_minutes=0)
+    r0 = run_analysis(t, v, off, chg, MaterialityWeights())
+    assert generate_findings(r0.table, r0.summary, off, chg)[0].startswith("Max time gap is off")
+    daily = run_analysis(pd.date_range("2026-01-01", periods=40, freq="D"), [1.0 + (i % 3) for i in range(40)], ext, chg, MaterialityWeights())
+    assert "was not applied" in generate_findings(daily.table, daily.summary, ext, chg)[0]

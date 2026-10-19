@@ -29,6 +29,7 @@ import contextvars
 import datetime as _dt
 import math
 
+import numpy as np
 import pandas as pd
 
 
@@ -42,6 +43,9 @@ _EPOCH_UNITS = {"seconds", "second", "s", "sec", "ms", "milliseconds"}
 
 class DataLoadError(Exception):
     pass
+
+
+_SRC_ROW = "__source_row__"
 
 
 # Category columns (e.g. "Day/Night") that belong to the rows returned by the
@@ -59,6 +63,22 @@ def last_extras():
 
 def reset_extras():
     _LAST_EXTRAS.set(None)
+    _LAST_META.set(None)
+
+
+def set_extras(extras):
+    """Replace the category columns (used when readings are removed by Max time gap)."""
+    _LAST_EXTRAS.set(extras or None)
+
+
+# Per-reading details of the last extract_series() call: original file row,
+# true UTC time (from an epoch column) and the file's other columns (Time,
+# Timezone, Timestamp (UTC), Day/Night ...) - used for the gaps listing.
+_LAST_META: contextvars.ContextVar = contextvars.ContextVar("last_meta", default=None)
+
+
+def last_meta():
+    return _LAST_META.get()
 
 
 def category_columns(df: pd.DataFrame) -> list:
@@ -170,8 +190,46 @@ def extract_series(df: pd.DataFrame, timestamp_col: str | None, value_col: str,
     extras = {c: [None if pd.isna(v) else str(v).strip() for v in df.loc[combined.index, c]]
               for c in category_columns(df)}
     _LAST_EXTRAS.set(extras or None)
+    _LAST_META.set(_series_meta(df, combined.index, value_col))
 
     return list(combined["ts"]), list(combined["val"])
+
+
+def _plain(v):
+    if v is None:
+        return None
+    try:
+        if pd.isna(v):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if isinstance(v, (np.integer,)):
+        return int(v)
+    if isinstance(v, (np.floating, float)):
+        return float(v)
+    if isinstance(v, (_dt.time, _dt.datetime, pd.Timestamp)):
+        return str(v)
+    return v if isinstance(v, (int, str, bool)) else str(v)
+
+
+def _series_meta(df: pd.DataFrame, idx, value_col: str) -> dict:
+    """File row, UTC seconds and the file's other columns for the chosen readings."""
+    rows = df.attrs.get("source_rows")
+    meta = {"source_rows": [int(rows[i]) for i in idx] if rows is not None and len(rows) == len(df) else None,
+            "utc_seconds": None, "context": {}}
+    epoch_col = df.attrs.get("epoch_column")
+    if epoch_col and epoch_col in df.columns:
+        s = pd.to_numeric(df.loc[idx, epoch_col], errors="coerce")
+        if s.notna().all():
+            scale = 1000.0 if s.gt(1e11).mean() > 0.5 else 1.0
+            meta["utc_seconds"] = (s / scale).astype(float).tolist()
+    measurement = {c for c in df.columns if c.endswith("]") and pd.api.types.is_numeric_dtype(df[c])}
+    skip = {DATETIME_COL, value_col, df.attrs.get("date_column")} | measurement
+    for c in df.columns:
+        if c in skip or (pd.api.types.is_numeric_dtype(df[c]) and c != epoch_col):
+            continue
+        meta["context"][c] = [_plain(v) for v in df.loc[idx, c]]
+    return meta
 
 
 def time_range(df: pd.DataFrame, timestamp_col: str | None):
@@ -224,6 +282,9 @@ def normalize_layout(df: pd.DataFrame) -> pd.DataFrame:
     df = df.loc[:, [not c.lower().startswith("unnamed:") or df[c].notna().any() for c in df.columns]]
     if df.empty:
         raise DataLoadError("The sheet has no data rows.")
+    # line of each data row in the file (header = line 1); kept through sorting
+    src_rows = (np.asarray(df.index) + 2) if isinstance(df.index, pd.RangeIndex) or pd.api.types.is_integer_dtype(df.index) \
+        else np.arange(len(df)) + 2
 
     # 1. Units row directly under the header
     units: dict[str, str] = {}
@@ -231,6 +292,10 @@ def normalize_layout(df: pd.DataFrame) -> pd.DataFrame:
         first = df.iloc[0]
         units = {c: str(first[c]).strip() for c in df.columns if isinstance(first[c], str)}
         df = df.iloc[1:].reset_index(drop=True)
+        src_rows = src_rows[1:]
+    else:
+        df = df.reset_index(drop=True)
+    df[_SRC_ROW] = src_rows
 
     # 2. Text that is really numbers -> numbers
     for col in df.columns:
@@ -264,7 +329,7 @@ def normalize_layout(df: pd.DataFrame) -> pd.DataFrame:
     df = df.reset_index(drop=True)
 
     # 6. Append units to measurement column names
-    skip = {DATETIME_COL, date_col, time_col, epoch_col}
+    skip = {DATETIME_COL, date_col, time_col, epoch_col, _SRC_ROW}
     measurement_cols = [
         c for c in df.columns
         if c not in skip and pd.api.types.is_numeric_dtype(df[c]) and not pd.api.types.is_bool_dtype(df[c])
@@ -278,8 +343,10 @@ def normalize_layout(df: pd.DataFrame) -> pd.DataFrame:
         rest = [c for c in df.columns if c != DATETIME_COL and c not in measurement_cols]
         df = df[[DATETIME_COL] + measurement_cols + rest]
 
+    df.attrs["source_rows"] = df.pop(_SRC_ROW).to_numpy()
     df.attrs["units"] = units
     df.attrs["epoch_column"] = epoch_col
+    df.attrs["date_column"] = date_col
     return df
 
 

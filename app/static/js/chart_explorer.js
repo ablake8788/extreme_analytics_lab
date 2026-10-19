@@ -151,7 +151,7 @@
           <span class="cx-lbl">Save</span>
           <button data-cx="saveview" title="Save what is on screen now as a PNG image">View (PNG)</button>
           <button data-cx="savepage" title="Save the whole current page, including the part scrolled off screen, as a PNG image">Full page (PNG)</button>
-          <button data-cx="savecsv" title="Save the readings on the current page as a CSV file">Data (CSV)</button>
+          <button data-cx="savecsv" title="Save the readings on the current page as an Excel file">Data (Excel)</button>
         </div>
       </div>
       <div class="cx-frame">
@@ -620,23 +620,25 @@
     }, 'image/png');
   }
 
-  function saveCsv() {
+  async function saveCsv() {   // saves an Excel workbook (.xlsx) - name kept for the button wiring
     if (!S.layout || !S.layout.data.length) { flash('Run an analysis first.'); return; }
     const data = pageRows();
     const preferred = ['Timestamp', 'Value', 'MovingAverage', 'RollingStdDev', 'UpperLimit', 'LowerLimit', 'ZScore',
       'ExtremeFlag', 'ExtremeDirection', 'State', 'PersistenceCount', 'ROC', 'ROC_ZScore', 'AbnormalChangeFlag',
       'MaterialChangeFlag', 'MaterialityScore'];
     const cols = preferred.filter((c) => c in data[0]).concat(Object.keys(data[0]).filter((c) => !preferred.includes(c)));
-    const esc = (v) => {
-      if (v === null || v === undefined) return '';
-      const t = String(v);
-      return /[",\r\n]/.test(t) ? `"${t.replace(/"/g, '""')}"` : t;
-    };
-    const lines = [cols.join(',')].concat(data.map((r) => cols.map((c) => esc(r[c])).join(',')));
     const first = data[0], last = data[data.length - 1];
-    const name = `extreme_data_${safe(seriesName())}_${stamp(first.Timestamp)}_to_${stamp(last.Timestamp)}_p${S.page + 1}.csv`;
-    download(new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' }), name);
-    flash(`Saved ${name}`);
+    const name = `extreme_data_${safe(seriesName())}_${stamp(first.Timestamp)}_to_${stamp(last.Timestamp)}_p${S.page + 1}.xlsx`;
+    flash('Creating the Excel file...');
+    try {
+      const blob = await window.XlsxExport.fromRecords(data, { columns: cols, sheetName: 'Data', about: [
+        ['Exported', new Date().toLocaleString()], ['Series', seriesName()], ['Page', String(S.page + 1)],
+        ['Readings', data.length], ['From', String(first.Timestamp)], ['To', String(last.Timestamp)]] });
+      download(blob, name);
+      flash(`Saved ${name}`);
+    } catch (e) {
+      flash('Could not create the Excel file: ' + (e.message || e));
+    }
   }
 
   // ---------------------------------------------------------------- data in
