@@ -87,11 +87,11 @@ if (-not $SkipServer) {
     $z = [IO.Compression.ZipFile]::OpenRead((Resolve-Path $zip))
     $names = $z.Entries | ForEach-Object { $_.FullName -replace '\\', '/' }
     $z.Dispose()
-    foreach ($need in @("app/services/report_xlsx.py", "app/services/report_xlsx_charts.py", "app/routes/ai_report.py", "app/static/js/ai_report.js", "app/static/js/reset.js")) {
+    foreach ($need in @("app/services/report_xlsx.py", "app/services/report_xlsx_charts.py", "app/routes/ai_report.py", "app/static/js/ai_report.js", "app/static/js/reset.js", "app/static/js/xlsx_export.js", "app/static/js/source.js", "app/routes/source.py", "app/services/sources/influx_data.py")) {
         if (-not ($names -contains $need)) { Fail "$need is not in $zip." }
     }
     if ($names | Where-Object { $_ -like "*config.local.ini" }) { Fail "$zip contains config.local.ini - it must never be uploaded." }
-    Ok ("Package OK: deploy_package\ ({0:N0} KB zip), Excel report + Reset button included." -f ((Get-Item $zip).Length / 1KB))
+    Ok ("Package OK: deploy_package\ ({0:N0} KB zip), Excel report, Reset, Excel exports and Live system included." -f ((Get-Item $zip).Length / 1KB))
     # one-file copy for the unzip folder: deploy_package_YYYYMMDD-HHMM.zip (extreme_server.zip + deploy_windows_server.ps1)
     if ($ZipFolder) {
         if (-not (Test-Path $ZipFolder)) { New-Item -ItemType Directory -Force $ZipFolder | Out-Null }
