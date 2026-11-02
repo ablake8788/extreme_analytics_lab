@@ -1,0 +1,172 @@
+EXTREME & CHANGE ANALYTICS LAB - WEB DEPLOYMENT STEPS (GODADDY)
+Project: extreme_analytics_lab
+File:    info_main\web_deployment\web_deployment_steps.txt
+
+The deployment package (passenger_wsgi.py, login page, server settings) is
+included in extreme_all_updates.zip. Part B step 5 installs it.
+
+
+==============================================================================
+BEFORE YOU START - KEY FACTS
+==============================================================================
+- You deploy the SOURCE CODE (app\, run.py, requirements.txt), not the .exe.
+  The .exe is a Windows desktop program; web hosting runs Linux.
+- The same code still runs locally on your PC (http://127.0.0.1:5100) with
+  login off. GoDaddy switches to server mode through environment variables.
+- Where the domain name is kept:
+    1. Registration: GoDaddy account > My Products > Domains
+       (or wherever the company domain is already registered)
+    2. DNS: a record that points the name to the GoDaddy hosting
+    3. The app: as an environment variable on GoDaddy (APP_DOMAIN),
+       never hard-coded in the code
+- Password and secret key are GoDaddy environment variables only.
+  They never go into git.
+
+
+==============================================================================
+PART A - GODADDY ACCOUNT SETUP (about 30 minutes)
+==============================================================================
+1. GET THE RIGHT HOSTING PLAN
+   Sign in at godaddy.com > My Products.
+   - Already have Web Hosting: Manage > cPanel Admin > under Software,
+     look for "Setup Python App".
+   - No hosting yet: buy Web Hosting (cPanel, Linux). Before paying, ask
+     GoDaddy chat: "Does this plan include Setup Python App for Python 3.9
+     or newer?"
+   - Do NOT use Windows/Plesk hosting.
+   - If "Setup Python App" is missing, contact GoDaddy support to enable
+     Python support on the plan.
+
+2. CHOOSE THE ADDRESS
+   Option 1 - subdomain of an existing company domain (recommended):
+     cPanel > Domains > Create a New Domain (or Subdomains)
+     e.g. analytics.yourcompany.com
+     If the company domain's DNS is managed outside GoDaddy, whoever manages
+     it adds an A record for "analytics" pointing to the hosting IP
+     (shown in cPanel's right-hand panel).
+   Option 2 - new domain:
+     GoDaddy > Domains > buy it, then attach it in cPanel > Domains.
+
+3. TURN ON HTTPS
+   cPanel > Security > SSL/TLS Status > select the domain > Run AutoSSL.
+   Can take up to an hour.
+
+4. TURN ON SSH (optional, recommended)
+   My Products > Web Hosting > Manage > Settings > SSH access > turn on.
+
+
+==============================================================================
+PART B - PREPARE THE CODE ON YOUR PC
+==============================================================================
+5. INSTALL THE DEPLOYMENT PACKAGE (once, from the project folder)
+     python apply_web_deployment.py
+   This adds 2 lines to app\__init__.py, adds  mode = local  to config.ini,
+   ignores config.local.ini in git, and creates config.local.ini (private).
+   Local use and the .exe are unchanged (mode = local, no login).
+
+   RUN ALL TESTS AUTOMATICALLY (recommended):
+     .\test_all.ps1            (add -SkipExe to skip building the .exe)
+   It tests local mode, server mode with login, the password safety check,
+   passenger_wsgi and the .exe - without touching your config.local.ini.
+
+   OR TEST THE LOGIN BY HAND - edit config.local.ini:
+     [app]
+     mode = server
+     [server]
+     password = test123
+   then run:
+     python run.py            (or .\rebuild.ps1)
+   Open http://127.0.0.1:5100 - you should get the sign-in page.
+   Check GoDaddy's start file too:
+     python -c "import passenger_wsgi; print('passenger_wsgi OK')"
+   Afterwards set  mode = local  again in config.local.ini.
+   (config.ini must stay mode = local - build.ps1 refuses to build otherwise.)
+
+   Settings order (later wins): config.ini > config.local.ini > environment
+   variables. Never put a password or secret key in config.ini.
+
+6. MAKE THE UPLOAD ZIP (from the project folder)
+     .\make_server_zip.ps1
+   Creates extreme_server.zip with app, run.py, passenger_wsgi.py,
+   requirements.txt, config.ini. It never includes config.local.ini,
+   .venv, tests, build or dist, and stops if config.ini holds a password.
+
+
+==============================================================================
+PART C - PUT THE APP ON GODADDY
+==============================================================================
+7. UPLOAD THE CODE
+   cPanel > Files > File Manager > your home folder (NOT public_html)
+   > create folder: extreme_analytics_lab
+   > upload extreme_server.zip into it > right-click > Extract.
+
+8. CREATE THE PYTHON APP
+   cPanel > Software > Setup Python App > Create Application
+     Python version .............. newest offered (3.9 or higher)
+     Application root ............ extreme_analytics_lab
+     Application URL ............. your domain or subdomain
+     Application startup file .... passenger_wsgi.py
+     Application entry point ..... application
+   Click Create.
+
+9. ADD ENVIRONMENT VARIABLES (same screen, "Environment variables")
+     APP_MODE ........ server
+     APP_DOMAIN ...... analytics.yourcompany.com
+     APP_PASSWORD .... a strong password
+     APP_SECRET_KEY .. a long random string (at least 16 characters)
+   Click Save. These never go into git.
+   Optional:
+    APP_UPLOAD_MAX_AGE_HOURS .. 24   (uploaded files are deleted after this)
+    APP_SESSION_HOURS ......... 12   (how long a login lasts)
+   The app will NOT start in server mode without a password and secret
+   key - it is never online unprotected.
+
+10. INSTALL THE PACKAGES
+    Under "Configuration files": add requirements.txt > Run Pip Install.
+    pandas and numpy take several minutes.
+    If it fails from the web page, use SSH: copy the "source activate"
+    command shown at the top of the app screen, run it, then:
+      pip install -r requirements.txt
+
+11. START IT
+    Click Restart at the top of the app screen.
+
+
+==============================================================================
+PART D - TEST
+==============================================================================
+12. Open https://analytics.yourcompany.com
+    Expect: login page and a padlock in the address bar.
+    Log in, upload Jensen_Beach_AHU1_temperature.xlsx, run the analysis.
+
+13. If there is an error: open the log file named on the Setup Python App
+    screen (usually stderr.log in the app folder) and send its contents
+    for help.
+
+
+==============================================================================
+PART E - UPDATING LATER
+==============================================================================
+14. Work locally as normal and commit to dev.
+    When a version is ready:
+      - make a new extreme_server.zip:  .\make_server_zip.ps1
+      - upload and extract it over the old files (step 7)
+      - click Restart (step 11)
+    Environment variables stay in place.
+
+
+==============================================================================
+CHECKLIST
+==============================================================================
+[ ] Linux cPanel hosting with Setup Python App confirmed
+[ ] Address chosen: ______________________________
+[ ] Domain/subdomain attached in cPanel, DNS pointing to hosting
+[ ] SSL (AutoSSL) active - padlock shows
+[ ] SSH access on (optional)
+[ ] python apply_web_deployment.py run; login tested locally via config.local.ini
+[ ] config.local.ini back to mode = local
+[ ] extreme_server.zip uploaded and extracted outside public_html
+[ ] Python app created (startup file passenger_wsgi.py, entry point application)
+[ ] Environment variables set (APP_MODE, APP_DOMAIN, APP_PASSWORD, APP_SECRET_KEY)
+[ ] Pip install finished
+[ ] App restarted, login works, AHU file analyzed successfully

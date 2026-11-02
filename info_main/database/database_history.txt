@@ -1,0 +1,180 @@
+﻿EXTREME & CHANGE ANALYTICS LAB - REPORT HISTORY DATABASE (MS SQL SERVER)
+Project: C:\Users\ablak\MorrisAutoGroup Dropbox\Alexander Blake\MorrisUniversalAutoGroup\ara\ara\Ange\projects\ara\Titanium Intelligent Solution\Titanium Analytics\working\extreme_analytics_lab
+File:    info_main\database\database_history.txt
+Script:  database\tables\titanium_analytics_history.sql
+
+Keeps every raw data file, every analysis result (CSV) and every Word report
+in SQL Server, so any report can be recreated later.
+
+
+==============================================================================
+1. DATA FLOW
+==============================================================================
+  ETL - raw sensor file (e.g. Jensen_Beach_AHU1_temperature.xlsx)
+    Extract    the file is read and stored byte for byte (ta.SourceFile)
+    Transform  rows go to stg.RawReading as text, then ta.usp_LoadRawReadings
+               parses dates, converts epoch to UTC, types the values
+    Load       typed readings in ta.RawReading
+
+  ELT - analysis results (e.g. extreme_results_20250801-20260925.csv)
+    Extract    the CSV is stored byte for byte (ta.ResultFile)
+    Load       the CSV rows go as-is (text) into stg.AnalysisResult
+    Transform  ta.usp_LoadAnalysisResults types them inside SQL into
+               ta.AnalysisResult, linked to the analysis run
+
+  Reports
+    each .docx is stored with its run, facts, wording, AI model and the
+    version of the reference document it followed (ta.Report)
+
+
+==============================================================================
+2. TABLES
+==============================================================================
+  Layer            Table                 Holds
+  ---------------  --------------------  ------------------------------------------
+  Reference        ta.Site               Jensen Beach (timezone America/New_York)
+                   ta.Sensor             AHU 1 (channel 0), Temperature, Fahrenheit / °F
+                                         (both pre-filled by the script)
+  ETL (raw file)   ta.SourceFile         the original .xlsx byte for byte, SHA-256 hash
+                                         (same file never stored twice), headers and
+                                         units row, load status
+                   stg.RawReading        rows as text, exactly as read from the file
+                   ta.RawReading         typed readings: epoch, UTC time, local date and
+                                         time, Day/Night, value (4 decimals)
+  ELT (results)    ta.AnalysisRun        source file, From/To, every parameter (Window,
+                                         K_E, ...), app build number
+                   ta.ResultFile         the results CSV byte for byte
+                   stg.AnalysisResult    the CSV's 30 columns as text, loaded as-is
+                   ta.AnalysisResult     typed results (flags as bits, times as
+                                         datetimes), transformed inside SQL
+  Reports          ta.ReferenceDocument  each version of Titanium_analytics.docx
+                   ta.Report             each .docx report + the facts and wording it
+                                         was built from, AI model, period
+
+
+==============================================================================
+3. PROCEDURES AND VIEWS
+==============================================================================
+  ta.usp_LoadRawReadings @SourceFileId
+      ETL transform: date (MM/DD/YYYY or ISO), epoch -> UTC (safe past 2038),
+      reports rejected rows, safe to re-run.
+  ta.usp_LoadAnalysisResults @ResultFileId
+      ELT transform: CSV text -> typed results, reports rejected rows,
+      safe to re-run.
+  ta.vw_RawReading_SourceLayout
+      readings in the original file layout (Date, Time, Timezone,
+      Timestamp (UTC), Day/Night, value) - to recreate the .xlsx
+  ta.vw_AnalysisResult_CsvLayout
+      results in the same 30-column order as the CSV - to recreate it
+  ta.vw_Reading
+      one reading per sensor and time across all uploads (newest upload wins)
+  ta.vw_RunHistory
+      one line per run: file, parameters, row counts, latest report
+
+
+==============================================================================
+4. RECREATING ANYTHING LATER
+==============================================================================
+  You want                     Get it from
+  ---------------------------  -----------------------------------------------
+  the original Excel file      ta.SourceFile.FileContent
+  the raw data in file layout  ta.vw_RawReading_SourceLayout
+  the results CSV              ta.ResultFile.FileContent  or
+                               ta.vw_AnalysisResult_CsvLayout
+  the same analysis again      parameters in ta.AnalysisRun + the readings
+  the Word report              ta.Report.ReportContent, or regenerate it from
+                               ta.Report.FactsJson
+
+
+==============================================================================
+5. INSTALL (ONCE)
+==============================================================================
+  1. Open SSMS (or Azure Data Studio) and connect to the SQL Server.
+  2. File > Open > File... >
+       database\tables\titanium_analytics_history.sql
+  3. At the top, uncomment the CREATE DATABASE / USE lines, or pick your
+     database in the toolbar.
+  4. Execute (F5). Safe to run again: tables are created only if missing,
+     views and procedures are replaced.
+  5. Check:
+       SELECT * FROM ta.Sensor;
+       SELECT name FROM sys.tables
+        WHERE schema_id IN (SCHEMA_ID('ta'), SCHEMA_ID('stg'));
+     Expect 11 tables and the Jensen Beach / AHU 1 (channel 0) sensor.
+
+  Requires SQL Server 2016 or newer (ISJSON, TRY_CONVERT, CREATE OR ALTER).
+  If anything shows red in SSMS, copy the message and ask for help.
+
+  Validation status
+    T-SQL syntax ........ every statement in the script parses as T-SQL
+    Real file formats ... the load procedures match the real CSV and Excel
+                          formats: flags (true/false), timestamps, Day/Night,
+                          4-decimal values
+    Run on SQL Server ... not yet - the first run in SSMS is the first live test
+
+
+==============================================================================
+6. MANUAL LOAD ORDER (until the app does it automatically)
+==============================================================================
+  ETL - raw file
+    1. INSERT ta.SourceFile (SensorId, FileName, FileExtension, SheetName,
+       FileSizeBytes, FileSha256, FileContent, HeaderJson)      -> SourceFileId
+    2. bulk insert the rows as text into stg.RawReading
+    3. EXEC ta.usp_LoadRawReadings @SourceFileId = <id>;
+
+  ELT - results
+    4. INSERT ta.AnalysisRun (... parameters ...)                -> AnalysisRunId
+    5. INSERT ta.ResultFile (AnalysisRunId, FileName, ..., FileContent)
+                                                                 -> ResultFileId
+    6. bulk insert the CSV rows as text into stg.AnalysisResult
+    7. EXEC ta.usp_LoadAnalysisResults @ResultFileId = <id>;
+
+  Report
+    8. INSERT ta.Report (AnalysisRunId, ResultFileId, ReferenceDocumentId,
+       FileName, ..., FactsJson, ReportContent)
+
+  Useful checks
+    SELECT * FROM ta.vw_RunHistory ORDER BY RunAtUtc DESC;
+    SELECT FileName, LoadStatus, LoadMessage FROM ta.SourceFile;
+    SELECT TOP (10) * FROM ta.vw_RawReading_SourceLayout
+     WHERE SourceFileId = 1 ORDER BY SourceRowNumber;
+    SELECT TOP (10) * FROM ta.vw_AnalysisResult_CsvLayout
+     WHERE AnalysisRunId = 1 ORDER BY RowNumber;
+
+
+==============================================================================
+7. NEXT STEP - APP INTEGRATION (planned)
+==============================================================================
+  The app will do the loads automatically:
+    - on upload ............. raw file saved and loaded (ETL)
+    - on Run analysis ....... an analysis run is created
+    - on Save results CSV /
+      Generate report ....... CSV and report stored (ELT)
+
+  Connection settings will go in config.local.ini (private, never in git):
+    [database]
+    server = <SQL Server name>
+    database = TitaniumAnalytics
+    ; Windows authentication, or a SQL login (password only in config.local.ini)
+
+  Never put a database password in config.ini.
+
+  Information needed to build the integration
+    - SQL Server name (the server or instance name shown in SSMS)
+    - Authentication type: Windows authentication or a SQL login
+    - Never share the password: with a SQL login it is typed only into
+      config.local.ini on your own PC
+
+
+==============================================================================
+8. FILES IN THE PROJECT
+==============================================================================
+  database\tables\titanium_analytics_history.sql   the DDL script (in git;
+                                                   contains no passwords/keys)
+  info_main\database\database_history.txt          this document (plain text)
+  info_main\database\database_history.docx         this document (Word)
+
+  Commit:
+    git add database/tables/titanium_analytics_history.sql info_main/database/database_history.txt
+    git commit -m "Add SQL Server history schema and documentation"
+    git push origin dev
