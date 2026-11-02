@@ -124,6 +124,8 @@ function badgeFor(state) {
 
 function renderResults(data) {
   $('resultsPanel').style.display = 'block';
+  window.TAL_ANALYSIS_SEQ += 1;
+  window.TAL_HISTORY_RUN_ID = data.history && data.history.run_id ? data.history.run_id : null;
   const s = data.summary;
   const items = [
     ['Rows analyzed', s.row_count],
@@ -139,7 +141,8 @@ function renderResults(data) {
   $('summaryGrid').innerHTML = items.map(([label, value]) =>
     `<div class="summary-item"><div class="label">${label}</div><div class="value">${value}</div></div>`
   ).join('') + (s.max_gap_note && s.max_gap_note !== 'Max time gap is off.'
-    ? `<div class="summary-item" style="grid-column:1/-1"><div class="label">Max time gap</div><div class="value" style="font-size:13px;font-weight:500">${s.max_gap_note}</div></div>` : '');
+    ? `<div class="summary-item" style="grid-column:1/-1"><div class="label">Max time gap</div><div class="value" style="font-size:13px;font-weight:500">${s.max_gap_note}</div></div>` : '')
+    + historyNote(data.history);
 
   const rows = data.rows;
   const tbody = document.querySelector('#resultsTable tbody');
@@ -156,6 +159,63 @@ function renderResults(data) {
 
   drawChart(rows);
 }
+
+// History database (SQL Server). [history] enabled = true shows a "Save to history" button
+// after each analysis (auto_save = true saves every analysis without clicking).
+window.TAL_HISTORY_STATUS = { enabled: false, auto_save: false };
+window.TAL_HISTORY_RUN_ID = null;       // run id of the analysis on screen, once saved
+window.TAL_ANALYSIS_SEQ = 0;            // +1 per analysis (a report belongs to one analysis)
+fetch('/api/history/status').then((r) => r.json()).then((d) => { window.TAL_HISTORY_STATUS = d || {}; }).catch(() => {});
+
+const histEsc = (t) => String(t == null ? '' : t).replace(/[<>&]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c]));
+
+function historyBody(h) {
+  if (h && h.run_id) return `Saved to the history database as run #${h.run_id}`;
+  if (h && h.error) return `<span style="color:#c62828">Not saved: ${histEsc(String(h.error).replace(/^(Not saved:\s*)+/, ''))}</span> ` +
+                           `<button type="button" class="hist-save" onclick="saveAnalysisToHistory().catch(() => {})">Try again</button>`;
+  return `<button type="button" class="hist-save" onclick="saveAnalysisToHistory().catch(() => {})">Save to history</button>` +
+         ` <span style="color:var(--muted,#5d6975);font-weight:400">Not saved yet - saves this analysis (file, settings, results) to SQL Server</span>`;
+}
+
+function historyNote(h) {
+  const st = window.TAL_HISTORY_STATUS || {};
+  if (!h && !st.enabled) return '';
+  return `<div class="summary-item" style="grid-column:1/-1"><div class="label">History</div>` +
+         `<div class="value" id="historyNote" style="font-size:13px;font-weight:500">${historyBody(h)}</div></div>`;
+}
+
+let historySaving = null;
+// Saves the analysis on screen (once); returns its run id. Also used by "Save to history" of a report.
+async function saveAnalysisToHistory() {
+  if (window.TAL_HISTORY_RUN_ID) return window.TAL_HISTORY_RUN_ID;
+  if (historySaving) return historySaving;
+  if (!lastAnalyzePayload) throw new Error('Run an analysis first.');
+  const seq = window.TAL_ANALYSIS_SEQ;
+  const box = $('historyNote');
+  if (box) box.innerHTML = 'Saving to the history database...';
+  historySaving = (async () => {
+    try {
+      const res = await fetch('/api/history/save-analysis', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(lastAnalyzePayload),
+      });
+      const d = await res.json().catch(() => ({}));
+      if (!res.ok || !d.history || !d.history.run_id) throw new Error(d.error || `HTTP ${res.status}`);
+      if (seq === window.TAL_ANALYSIS_SEQ) {
+        window.TAL_HISTORY_RUN_ID = d.history.run_id;
+        if ($('historyNote')) $('historyNote').innerHTML = historyBody(d.history);
+        document.dispatchEvent(new CustomEvent('tal-history-saved', { detail: d.history }));
+      }
+      return d.history.run_id;
+    } catch (e) {
+      if ($('historyNote') && seq === window.TAL_ANALYSIS_SEQ) $('historyNote').innerHTML = historyBody({ error: e.message });
+      throw e;
+    } finally {
+      historySaving = null;
+    }
+  })();
+  return historySaving;
+}
+window.saveAnalysisToHistory = saveAnalysisToHistory;
 
 function fmt(v) {
   if (v === null || v === undefined) return '';

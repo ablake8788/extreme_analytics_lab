@@ -6,6 +6,7 @@ from flask import Blueprint, request, jsonify
 from app.config import Config
 from app.services.data_loader import read_table, read_sheet, list_sheets, column_names, extract_series, DataLoadError
 from app.services.data_loader import last_meta, last_extras, set_extras
+from app.services import history_writer
 import numpy as np
 from app.services.extreme_change_engine import (
     ExtremeParams, ChangeParams, MaterialityWeights, run_analysis,
@@ -42,6 +43,7 @@ def upload():
     except DataLoadError as exc:
         os.remove(path)
         return jsonify({"error": str(exc)}), 400
+    history_writer.remember(path, type="Upload", filename=file.filename, columns=columns)
 
     return jsonify({
         "token": token + ext,
@@ -191,9 +193,29 @@ def analyze():
     records = table.to_dict(orient="records")
     records = [_clean_record(r) for r in records]
     gaps, removed = _gaps_payload(timestamps, values, result, ext_params)
+    history = _save_history(data, result, ext_params, chg_params, weights, gaps)
 
-    return jsonify({"summary": result.summary, "rows": records, "gaps": gaps,
-                    "removed_rows": [_clean_record(r) for r in removed]})
+    out = {"summary": result.summary, "rows": records, "gaps": gaps,
+           "removed_rows": [_clean_record(r) for r in removed]}
+    if history is not None:
+        out["history"] = history
+    return jsonify(out)
+
+
+def _save_history(data, result, ext_params, chg_params, weights, gaps):
+    """Report history database (SQL Server) - only when [history] enabled = true."""
+    try:
+        path = _resolve_path(data.get("token", ""))
+        if not path:
+            return None
+        from flask import session
+        ctx = (last_meta() or {}).get("context") or {}
+        tz_col = next((c for c in ctx if str(c).strip().lower() in ("timezone", "time zone", "tz")), None)
+        tz = next((str(v) for v in (ctx.get(tz_col) or []) if v), None) if tz_col else None
+        return history_writer.save_analysis(path, data, result, ext_params, chg_params, weights, gaps=gaps,
+                                            extras=last_extras(), user=session.get("tal_user"), timezone=tz)
+    except Exception as exc:   # never break the analysis because of the history
+        return {"error": str(exc)[:300]}
 
 
 @api_bp.post("/report")
@@ -341,4 +363,5 @@ def reset_session():
             removed.append(path.name)
         except OSError:
             pass
+        history_writer.forget(path)
     return jsonify({"reset": True, "removed": removed})

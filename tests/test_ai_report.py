@@ -316,7 +316,8 @@ def test_file_names_stay_short(monkeypatch, tmp_path, csv_text):
     for r in d["reports"]:
         assert len(r["filename"]) <= 48
         stored = [p.name for p in _report_dir().glob(r["token"] + ".*")]
-        assert sorted(stored) == sorted([r["token"] + "." + r["kind"], r["token"] + ".name"])
+        assert sorted(stored) == sorted([r["token"] + "." + r["kind"], r["token"] + ".name",
+                                         r["token"] + ".hist.json"])   # facts for "Save to history"
         dl = client.get(f"/api/ai-report/file/{r['token']}")
         assert r["filename"] in dl.headers["Content-Disposition"]
 

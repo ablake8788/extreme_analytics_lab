@@ -207,11 +207,18 @@
       fd.append('units', units);
       fd.append('format', format);
       fd.append('include_data', $('[data-ar=incdata]').checked ? '1' : '0');
+      fd.append('scope', source);
+      const hs = window.TAL_HISTORY_STATUS || {};
+      if (source !== 'file' && hs.auto_save && window.TAL_HISTORY_RUN_ID) fd.append('run_id', window.TAL_HISTORY_RUN_ID);
       const res = await fetch('/api/ai-report', { method: 'POST', body: fd });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
       if (!data.reports) data.reports = [{ token: data.token, filename: data.filename, size: data.size, saved_to: data.saved_to, kind: 'docx' }];
       lastBatch = data;
+      lastBatch.scope = source;
+      lastBatch.analysisSeq = window.TAL_ANALYSIS_SEQ;
+      const saved = (data.history && data.history.report_ids) || [];
+      lastBatch.reports.forEach((r, i) => { if (saved[i]) r.historyId = saved[i]; });
       showReady();
       if (data.can_open && $('[data-ar=autoopen]').checked) {
         for (const r of data.reports) await openReport(r, true);   // PC / .exe: open in Word / Excel right away
@@ -245,6 +252,7 @@
       row.querySelector('[data-act=download]').onclick = () => downloadReport(r);
       const cp = row.querySelector('[data-act=copy]');
       if (cp) cp.onclick = () => copyToFolder(r);
+      addHistoryButton(row, r, b);
       box.appendChild(row);
     });
     if (b.can_open && b.folder) {
@@ -265,6 +273,43 @@
     parts.push(b.source === 'openai' ? 'Wording by OpenAI, numbers computed by the app.' : 'Plain wording (AI not used).');
     if (b.note) parts.push(esc(b.note));
     status(parts.join('<br>'), b.source === 'openai' ? 'ok' : undefined);
+  }
+
+  // "Save to history": stores the report (and, if not saved yet, its analysis) in the SQL Server history
+  function addHistoryButton(row, r, b) {
+    const hs = window.TAL_HISTORY_STATUS || {};
+    if (!hs.enabled || b.scope === 'file') return;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'ar-secondary';
+    const done = (id) => { btn.textContent = `Saved to history (report #${id})`; btn.disabled = true; };
+    btn.textContent = 'Save to history';
+    if (r.historyId) done(r.historyId);
+    btn.onclick = async () => {
+      if (b.analysisSeq !== window.TAL_ANALYSIS_SEQ) {
+        status('This report belongs to an earlier analysis - generate it again to save it to the history.', 'error');
+        return;
+      }
+      btn.disabled = true;
+      btn.textContent = 'Saving...';
+      try {
+        const runId = window.TAL_HISTORY_RUN_ID || await window.saveAnalysisToHistory();
+        const res = await fetch('/api/history/save-report', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: r.token, run_id: runId }),
+        });
+        const d = await res.json().catch(() => ({}));
+        if (!res.ok || !d.history) throw new Error(d.error || `HTTP ${res.status}`);
+        r.historyId = d.history.report_ids[0];
+        done(r.historyId);
+        status(`Saved <b>${esc(r.filename)}</b> to the history database (analysis run #${runId}).`, 'ok');
+      } catch (e) {
+        btn.disabled = false;
+        btn.textContent = 'Save to history';
+        status(`Could not save to the history: ${esc(e.message || e)}`, 'error');
+      }
+    };
+    row.appendChild(btn);
   }
 
   async function fetchReportBlob(r) {

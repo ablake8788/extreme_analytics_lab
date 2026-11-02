@@ -46,3 +46,14 @@ session_hours = 12
 ; username = analytics_ro
 ; password = <password>
 ; tls = false
+
+; ------------------------------------------------------- Report history (SQL Server)
+; Check with: .venv\Scripts\python.exe tools\check_sqlserver.py
+[history]
+; server = .\SQLEXPRESS            ; as shown in SSMS: localhost, .\SQLEXPRESS, ALEXB\SQLEXPRESS
+; database = PBI_Projects
+; auth = windows                   ; or sql + username/password below
+; username = tal_history
+; password = <password>
+; dsn = TAL_History                ; optional: use an ODBC data source instead of server
+; enabled = true

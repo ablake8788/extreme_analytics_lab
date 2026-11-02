@@ -15,9 +15,20 @@
           stg.AnalysisResult the CSV rows as text (loaded as-is)
           ta.AnalysisResult  typed results, transformed inside SQL
 
+     MAX TIME GAP
+          ta.TimeGap         readings removed by Max time gap (reading before / after each gap)
+
      REPORTS
           ta.ReferenceDocument  versions of Titanium_analytics.docx
-          ta.Report             each Word report + the facts it was built from
+          ta.Report             each Word / Excel report + the facts it was built from
+
+   Filled automatically by the app (app/services/history_writer.py) when
+   [history] enabled = true in config.local.ini. Uploaded files and files
+   loaded from the Live system (InfluxDB + ScyllaDB) are both kept.
+
+   Version 1.1 (2026-11-01): SourceType / SourceRef, file unique per sensor,
+   MaxGapMinutes / SkippedReadings / ReadingsInFile, TimeGap_min, ta.TimeGap.
+   An older 1.0 database is upgraded in place by section 4b.
 
    Recreate later:
      original raw file ......... ta.SourceFile.FileContent
@@ -27,7 +38,8 @@
      Word report ............... ta.Report.ReportContent (or regenerate from FactsJson)
 
    Run this whole script once in SSMS or Azure Data Studio. It is safe to run
-   again: tables are created only if missing, views/procedures are replaced.
+   again: tables are created only if missing, new columns are added to
+   existing tables (4b), views/procedures are replaced.
    ============================================================================ */
 
 -- Optional: create the database first
@@ -35,6 +47,10 @@
 -- GO
 -- USE TitaniumAnalytics;
 -- GO
+
+-- Target database (change here if you install it elsewhere)
+USE PBI_Projects;
+GO
 
 SET ANSI_NULLS ON;
 SET QUOTED_IDENTIFIER ON;
@@ -85,8 +101,10 @@ CREATE TABLE ta.SourceFile (
     FileExtension    VARCHAR(10)        NOT NULL,             -- '.xlsx' '.xlsm' '.csv'
     SheetName        NVARCHAR(128)      NULL,                 -- 'Sheet1'
     FileSizeBytes    BIGINT             NOT NULL,
-    FileSha256       BINARY(32)         NOT NULL,             -- same file is never stored twice
+    FileSha256       BINARY(32)         NOT NULL,             -- same file is stored once per sensor
     FileContent      VARBINARY(MAX)     NOT NULL,             -- the original file, byte for byte
+    SourceType       VARCHAR(10)        NOT NULL CONSTRAINT DF_SourceFile_Type DEFAULT 'Upload',  -- Upload | Live
+    SourceRef        NVARCHAR(MAX)      NULL,                 -- Live: site_id, point_id, date range (JSON)
     HeaderJson       NVARCHAR(MAX)      NULL,                 -- column headers + units row as read
     ReadingCount     INT                NULL,
     FirstReadingUtc  DATETIME2(0)       NULL,
@@ -95,9 +113,11 @@ CREATE TABLE ta.SourceFile (
     LoadMessage      NVARCHAR(1000)     NULL,
     LoadedAtUtc      DATETIME2(0)       NOT NULL CONSTRAINT DF_SourceFile_Loaded DEFAULT SYSUTCDATETIME(),
     LoadedBy         NVARCHAR(128)      NOT NULL CONSTRAINT DF_SourceFile_By DEFAULT SUSER_SNAME(),
-    CONSTRAINT UQ_SourceFile_Sha UNIQUE (FileSha256),
+    CONSTRAINT UQ_SourceFile_Sha_Sensor UNIQUE (FileSha256, SensorId),
     CONSTRAINT CK_SourceFile_Status CHECK (LoadStatus IN ('Staged', 'Loaded', 'Failed')),
-    CONSTRAINT CK_SourceFile_Header CHECK (HeaderJson IS NULL OR ISJSON(HeaderJson) = 1)
+    CONSTRAINT CK_SourceFile_Header CHECK (HeaderJson IS NULL OR ISJSON(HeaderJson) = 1),
+    CONSTRAINT CK_SourceFile_Type   CHECK (SourceType IN ('Upload', 'Live')),
+    CONSTRAINT CK_SourceFile_Ref    CHECK (SourceRef IS NULL OR ISJSON(SourceRef) = 1)
 );
 GO
 
@@ -106,7 +126,7 @@ GO
 IF OBJECT_ID(N'stg.RawReading', N'U') IS NULL
 CREATE TABLE stg.RawReading (
     SourceFileId     INT                NOT NULL,
-    SourceRowNumber  INT                NOT NULL,             -- data row number in the file (1 = first reading)
+    SourceRowNumber  INT                NOT NULL,             -- line in the file (header = 1, as in the app's gap listing)
     DateText         NVARCHAR(30)       NULL,                 -- 'Date'            e.g. '08/01/2025' or '2025-08-01 00:00:00'
     TimeText         NVARCHAR(20)       NULL,                 -- 'Time'            e.g. '11:29:27'
     TimezoneText     NVARCHAR(64)       NULL,                 -- 'Timezone'        e.g. 'America/New_York'
@@ -191,6 +211,10 @@ CREATE TABLE ta.AnalysisRun (
     W_Magnitude         DECIMAL(9,4)   NULL,
     W_Duration          DECIMAL(9,4)   NULL,
     W_Frequency         DECIMAL(9,4)   NULL,
+    -- Max time gap: readings after a longer gap are removed from the analysis (0 = off)
+    MaxGapMinutes       DECIMAL(9,2)   NULL,
+    SkippedReadings     INT            NULL,                  -- removed by Max time gap (see ta.TimeGap)
+    ReadingsInFile      INT            NULL,                  -- readings in the period before removal
     ParametersJson      NVARCHAR(MAX)  NULL,                  -- everything the app sent, for exact re-runs
     SummaryJson         NVARCHAR(MAX)  NULL,                  -- the app's result summary
     ResultRowCount      INT            NULL,
@@ -207,7 +231,7 @@ CREATE TABLE ta.AnalysisRun (
 );
 GO
 
--- The results CSV file itself (keep the csv file)
+-- The results file (CSV written by the app from the analysis, one row per kept reading)
 IF OBJECT_ID(N'ta.ResultFile', N'U') IS NULL
 CREATE TABLE ta.ResultFile (
     ResultFileId     INT IDENTITY(1,1)  NOT NULL CONSTRAINT PK_ResultFile PRIMARY KEY,
@@ -261,6 +285,7 @@ CREATE TABLE stg.AnalysisResult (
     [State]              NVARCHAR(60)   NULL,
     UpperLimit           NVARCHAR(40)   NULL,
     ZScore               NVARCHAR(40)   NULL,
+    TimeGap_min          NVARCHAR(40)   NULL,
     [Day/Night]          NVARCHAR(10)   NULL,
     StagedAtUtc          DATETIME2(0)   NOT NULL CONSTRAINT DF_stgRes_Staged DEFAULT SYSUTCDATETIME(),
     CONSTRAINT PK_stgAnalysisResult PRIMARY KEY (ResultFileId, SourceRowNumber)
@@ -301,6 +326,7 @@ CREATE TABLE ta.AnalysisResult (
     FrequencyCount       INT            NULL,
     MaterialChangeFlag   BIT            NOT NULL,
     MaterialityScore     FLOAT          NULL,
+    TimeGap_min          FLOAT          NULL,                 -- minutes since the previous reading in the file
     CONSTRAINT PK_AnalysisResult PRIMARY KEY CLUSTERED (AnalysisRunId, RowNumber),
     CONSTRAINT CK_Result_DayNight  CHECK (DayNight IS NULL OR DayNight IN ('Day', 'Night')),
     CONSTRAINT CK_Result_Direction CHECK (ExtremeDirection IS NULL OR ExtremeDirection IN ('upper', 'lower', 'none'))
@@ -312,6 +338,60 @@ GO
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'IX_AnalysisResult_NotNormal')
     CREATE INDEX IX_AnalysisResult_NotNormal ON ta.AnalysisResult (AnalysisRunId, [State], ReadingTime)
     WHERE [State] <> 'Normal';
+GO
+
+/* ============================================================================
+   4a. MAX TIME GAP - readings removed from a run (one row per removed reading)
+   ============================================================================ */
+IF OBJECT_ID(N'ta.TimeGap', N'U') IS NULL
+CREATE TABLE ta.TimeGap (
+    AnalysisRunId        INT            NOT NULL CONSTRAINT FK_TimeGap_Run REFERENCES ta.AnalysisRun (AnalysisRunId),
+    GapNumber            INT            NOT NULL,             -- 'Gap #'
+    BeforeTime           DATETIME2(0)   NULL,                 -- last kept reading before the gap (local time)
+    BeforeValue          FLOAT          NULL,
+    BeforeSourceRow      INT            NULL,                 -- line in the source file
+    AfterTime            DATETIME2(0)   NOT NULL,             -- the removed reading
+    AfterValue           FLOAT          NULL,
+    AfterSourceRow       INT            NULL,
+    GapMinutes           FLOAT          NOT NULL,
+    GapHours             FLOAT          NULL,
+    EstMissingReadings   INT            NULL,                 -- gap / usual interval
+    IntervalMinutes      INT            NULL,                 -- usual interval between readings
+    MeasuredOn           VARCHAR(12)    NULL,                 -- 'UTC' or 'local time'
+    ContextJson          NVARCHAR(MAX)  NULL,                 -- Before:/After: columns (Timezone, Day/Night ...)
+    CONSTRAINT PK_TimeGap PRIMARY KEY CLUSTERED (AnalysisRunId, GapNumber),
+    CONSTRAINT CK_TimeGap_Context CHECK (ContextJson IS NULL OR ISJSON(ContextJson) = 1)
+);
+GO
+
+/* ============================================================================
+   4b. UPGRADE a database made with version 1.0 of this script (safe to re-run)
+   ============================================================================ */
+IF COL_LENGTH(N'ta.SourceFile', N'SourceType') IS NULL
+    ALTER TABLE ta.SourceFile ADD SourceType VARCHAR(10) NOT NULL
+        CONSTRAINT DF_SourceFile_Type DEFAULT 'Upload'
+        CONSTRAINT CK_SourceFile_Type CHECK (SourceType IN ('Upload', 'Live'));
+GO
+IF COL_LENGTH(N'ta.SourceFile', N'SourceRef') IS NULL
+    ALTER TABLE ta.SourceFile ADD SourceRef NVARCHAR(MAX) NULL
+        CONSTRAINT CK_SourceFile_Ref CHECK (SourceRef IS NULL OR ISJSON(SourceRef) = 1);
+GO
+IF OBJECT_ID(N'ta.UQ_SourceFile_Sha', N'UQ') IS NOT NULL
+    ALTER TABLE ta.SourceFile DROP CONSTRAINT UQ_SourceFile_Sha;
+GO
+IF OBJECT_ID(N'ta.UQ_SourceFile_Sha_Sensor', N'UQ') IS NULL
+    ALTER TABLE ta.SourceFile ADD CONSTRAINT UQ_SourceFile_Sha_Sensor UNIQUE (FileSha256, SensorId);
+GO
+IF COL_LENGTH(N'ta.AnalysisRun', N'MaxGapMinutes') IS NULL
+    ALTER TABLE ta.AnalysisRun ADD MaxGapMinutes DECIMAL(9,2) NULL;
+IF COL_LENGTH(N'ta.AnalysisRun', N'SkippedReadings') IS NULL
+    ALTER TABLE ta.AnalysisRun ADD SkippedReadings INT NULL;
+IF COL_LENGTH(N'ta.AnalysisRun', N'ReadingsInFile') IS NULL
+    ALTER TABLE ta.AnalysisRun ADD ReadingsInFile INT NULL;
+IF COL_LENGTH(N'stg.AnalysisResult', N'TimeGap_min') IS NULL
+    ALTER TABLE stg.AnalysisResult ADD TimeGap_min NVARCHAR(40) NULL;
+IF COL_LENGTH(N'ta.AnalysisResult', N'TimeGap_min') IS NULL
+    ALTER TABLE ta.AnalysisResult ADD TimeGap_min FLOAT NULL;
 GO
 
 /* ============================================================================
@@ -337,7 +417,7 @@ CREATE TABLE ta.Report (
     ReportTextJson       NVARCHAR(MAX)  NULL,                 -- the wording used (AI or built-in)
     FileSizeBytes        BIGINT         NOT NULL,
     FileSha256           BINARY(32)     NOT NULL,
-    ReportContent        VARBINARY(MAX) NOT NULL,             -- the .docx, byte for byte
+    ReportContent        VARBINARY(MAX) NOT NULL,             -- the .docx or .xlsx, byte for byte
     GeneratedAtUtc       DATETIME2(0)   NOT NULL CONSTRAINT DF_Report_Generated DEFAULT SYSUTCDATETIME(),
     GeneratedBy          NVARCHAR(128)  NOT NULL CONSTRAINT DF_Report_By DEFAULT SUSER_SNAME(),
     CONSTRAINT CK_Report_Scope  CHECK (Scope IN ('all', 'page', 'file')),
@@ -447,7 +527,7 @@ BEGIN
          ExtremeFlag, ExtremeDirection, [State], PersistenceCount,
          EventStartTime, EventEndTime, MeanZ_event, ConfirmedShiftFlag, MaterialExtremeFlag,
          ROC, ROC_MeanBaseline, ROC_StdDev, ROC_ZScore,
-         AbnormalChangeFlag, FrequencyCount, MaterialChangeFlag, MaterialityScore)
+         AbnormalChangeFlag, FrequencyCount, MaterialChangeFlag, MaterialityScore, TimeGap_min)
     SELECT
         @RunId,
         s.SourceRowNumber,
@@ -480,7 +560,8 @@ BEGIN
         CASE WHEN s.AbnormalChangeFlag  IN (N'True', N'true', N'1') THEN 1 ELSE 0 END,
         TRY_CONVERT(int, TRY_CONVERT(float, s.FrequencyCount)),
         CASE WHEN s.MaterialChangeFlag  IN (N'True', N'true', N'1') THEN 1 ELSE 0 END,
-        TRY_CONVERT(float, s.MaterialityScore)
+        TRY_CONVERT(float, s.MaterialityScore),
+        TRY_CONVERT(float, s.TimeGap_min)
     FROM stg.AnalysisResult AS s
     WHERE s.ResultFileId = @ResultFileId
       AND TRY_CONVERT(datetime2(0), LEFT(s.[Timestamp], 19), 120) IS NOT NULL
@@ -563,6 +644,7 @@ SELECT
     a.MaterialityScore, a.MeanZ_event, a.MovingAverage, a.PersistenceCount,
     a.ROC, a.ROC_MeanBaseline, a.ROC_StdDev, a.ROC_ZScore, a.RollingStdDev,
     a.[State], a.UpperLimit, a.ZScore,
+    a.TimeGap_min,
     a.DayNight                                                     AS [Day/Night]
 FROM ta.AnalysisResult AS a;
 GO
@@ -576,10 +658,12 @@ SELECT
     ar.RunBy,
     si.SiteName,
     se.ChannelName,
+    sf.SourceType,
     sf.FileName                    AS SourceFileName,
     sf.ReadingCount                AS SourceReadings,
     ar.DateFrom, ar.DateTo,
     ar.BaselineMethod, ar.WindowSize, ar.K_E,
+    ar.MaxGapMinutes, ar.SkippedReadings,
     ar.ResultRowCount,
     ar.AppBuild, ar.AppVersion,
     ar.Status,
@@ -623,6 +707,8 @@ GO
      6. bulk insert the CSV rows as text into stg.AnalysisResult
      7. EXEC ta.usp_LoadAnalysisResults @ResultFileId = <id>;
 
+     7b. INSERT ta.TimeGap (one row per reading removed by Max time gap)
+
    Report
      8. INSERT ta.Report (AnalysisRunId, ResultFileId, ReferenceDocumentId,
         FileName, ..., FactsJson, ReportContent)
@@ -633,3 +719,16 @@ GO
      SELECT TOP (10) * FROM ta.vw_RawReading_SourceLayout WHERE SourceFileId = 1 ORDER BY SourceRowNumber;
      SELECT TOP (10) * FROM ta.vw_AnalysisResult_CsvLayout WHERE AnalysisRunId = 1 ORDER BY RowNumber;
    ============================================================================ */
+
+
+
+   USE PBI_Projects;
+SELECT s.name AS [schema], o.type_desc, COUNT(*) AS objects
+FROM sys.objects o JOIN sys.schemas s ON s.schema_id = o.schema_id
+WHERE s.name IN ('ta','stg') AND o.type IN ('U','V','P')
+GROUP BY s.name, o.type_desc ORDER BY 1, 2;
+
+SELECT COL_LENGTH('ta.SourceFile','SourceType')     AS SourceType,
+       COL_LENGTH('ta.AnalysisRun','MaxGapMinutes') AS MaxGapMinutes,
+       OBJECT_ID('ta.TimeGap')                       AS TimeGapTable;
+SELECT * FROM ta.Site;

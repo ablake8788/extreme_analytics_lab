@@ -30,6 +30,8 @@ Thumbs.db
 uploads/*.csv
 uploads/*.xlsx
 uploads/*.xlsm
+uploads/*.json
+uploads/reports/
 
 # PyInstaller build output
 build/

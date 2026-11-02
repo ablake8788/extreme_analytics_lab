@@ -8,3 +8,5 @@ python-docx>=1.1
 requests>=2.31,<3.0
 influxdb-client>=1.40,<2.0
 scylla-driver>=3.26,<4.0
+
+pyodbc>=5.0,<6.0

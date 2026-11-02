@@ -142,6 +142,7 @@
   function formatSummary(grid) {
     grid.querySelectorAll('.summary-item .value').forEach((el) => {
       if (el.dataset.tiFormatted === el.textContent) return;
+      if (el.children.length) return;   // has buttons / markup (e.g. History) - leave as is
       const t = el.textContent.trim();
       let out = t;
       if (/^-?\d+(\.\d+)?$/.test(t)) {

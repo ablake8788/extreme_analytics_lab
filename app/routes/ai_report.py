@@ -4,7 +4,8 @@ ai_report.py - API for AI results reports.
   GET  /api/ai-report/status   what is configured (never returns the API key)
   POST /api/ai-report          multipart: file=<results CSV>, location, units,
                                format = docx | xlsx | both (default docx),
-                               include_data = 1 | 0 (Excel: add the Data tab)
+                               include_data = 1 | 0 (Excel: add the Data tab),
+                               run_id + scope (optional: save to the history database)
                                -> JSON with one entry per report in "reports"
   GET  /api/ai-report/file/<token>        the report file (Save as / download)
   POST /api/ai-report/open/<token>        open it in Word / Excel (PC version only)
@@ -46,7 +47,7 @@ def _report_dir() -> Path:
     d = Path(Config.UPLOAD_DIR) / "reports"
     d.mkdir(parents=True, exist_ok=True)
     now = time.time()
-    for f in [*d.glob("*.docx"), *d.glob("*.xlsx"), *d.glob("*.name")]:  # tidy up old ones
+    for f in [*d.glob("*.docx"), *d.glob("*.xlsx"), *d.glob("*.name"), *d.glob("*.hist.json")]:  # tidy up old ones
         try:
             if now - f.stat().st_mtime > KEEP_HOURS * 3600:
                 f.unlink()
@@ -139,6 +140,29 @@ def _save_copy(folder, name: str, data: bytes) -> str:
         return f"(not saved: {exc.strerror or exc})"
 
 
+def _keep_snapshot(token: str, facts, text, location, units, scope) -> None:
+    """Facts and wording of the report, so "Save to history" can store it later (kept like the report)."""
+    try:
+        from app.services.history_writer import report_snapshot
+        (_report_dir() / f"{token}.hist.json").write_text(
+            report_snapshot(facts, text, location, units, scope), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def report_for_history(token: str):
+    """(file name, bytes, snapshot dict) of a generated report, or None."""
+    import json
+    path = _report_path(token)
+    if not path:
+        return None
+    try:
+        snap = json.loads((_report_dir() / f"{token}.hist.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return _display_name(path), path.read_bytes(), snap
+
+
 @ai_report_bp.get("/status")
 def status():
     s = load_ai_settings()
@@ -200,16 +224,30 @@ def make_report():
             if not files:
                 return jsonify({"error": f"Could not build the Excel report: {exc}"}), 500
 
+    history = None
+    run_id = (request.form.get("run_id") or "").strip()
+    scope = (request.form.get("scope") or "all").strip()
+    if run_id:
+        from flask import session
+        from app.services import history_writer
+        history = history_writer.save_reports(
+            run_id, files, facts, text, location, units, scope=scope,
+            reference_path=s.reference_document, reference_text=ref_text, user=session.get("tal_user"))
+
     reports = []
     for name, data in files:
         saved = _save_copy(s.output_folder, name, data) if _mode() == "local" else ""
         token = _store(data, name)
+        _keep_snapshot(token, facts, text, location, units, scope)
         reports.append({"token": token, "filename": name, "size": len(data), "saved_to": saved,
                         "kind": Path(name).suffix.lstrip(".")})
     note = text.note or (f"{len(text.removed_sentences)} unverified sentence(s) removed" if text.removed_sentences else "")
     first = reports[0]
-    return jsonify({**first, "reports": reports, "source": text.source, "note": note, "can_open": _can_open(),
-                    "folder": str(s.output_folder) if (_mode() == "local" and s.output_folder) else ""})
+    out = {**first, "reports": reports, "source": text.source, "note": note, "can_open": _can_open(),
+           "folder": str(s.output_folder) if (_mode() == "local" and s.output_folder) else ""}
+    if history is not None:
+        out["history"] = history
+    return jsonify(out)
 
 
 @ai_report_bp.get("/file/<token>")
