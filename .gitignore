@@ -41,9 +41,17 @@ dist/
 # Patch backups
 *.bak
 .venv_old_*/
+build_old_*/
+dist_old_*/
+deploy_package_old_*/
+.pytest_cache_old_*/
 
 # Web deployment - private settings and upload zip
 config.local.ini
+config.local.ini.*
+!config.local.ini.example
+*.bak_*
+*.before_rollback
 extreme_server.zip
 
 # AI reports contain sensor data

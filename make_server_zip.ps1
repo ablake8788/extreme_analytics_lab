@@ -44,7 +44,14 @@ $pkg = "deploy_package"
 if (Test-Path $pkg) { Remove-Item -Recurse -Force $pkg }
 New-Item -ItemType Directory $pkg | Out-Null
 Copy-Item $out $pkg
-if (Test-Path "deploy_windows_server.ps1") { Copy-Item "deploy_windows_server.ps1" $pkg }
+if (Test-Path "deploy_windows_server.ps1") {
+    Copy-Item "deploy_windows_server.ps1" $pkg
+    (Get-Item (Join-Path $pkg "deploy_windows_server.ps1")).LastWriteTime = Get-Date   # same date as the build
+}
+if (Test-Path "server_deploy.ps1") {   # one-command deploy on the server (copy, backup, deploy, checks, rollback)
+    Copy-Item "server_deploy.ps1" $pkg
+    (Get-Item (Join-Path $pkg "server_deploy.ps1")).LastWriteTime = Get-Date
+}
 Write-Host "Created $pkg\ with extreme_server.zip + deploy_windows_server.ps1" -ForegroundColor Green
 Write-Host "Copy the deploy_package folder to the server (Remote Desktop) and run there, as administrator:" -ForegroundColor Cyan
 Write-Host "  .\deploy_windows_server.ps1 -Domain your.domain.com" -ForegroundColor Cyan

@@ -347,7 +347,9 @@
     }
     const tag = S.cats.map((c) => S.catFilter[c] && S.catFilter[c] !== 'All' ? S.catFilter[c] : '').filter(Boolean).join('_');
     const stateTag = S.stateFilter === 'all' ? '' : S.stateFilter === 'extremes' ? 'extremes' : S.stateFilter;
-    const name = ['extreme_listing', tag, stateTag].filter(Boolean).join('_').replace(/[^A-Za-z0-9._-]+/g, '_') + '.xlsx';
+    const kind = ['extreme_listing', tag, stateTag].filter(Boolean).join('_').replace(/[^A-Za-z0-9_-]+/g, '_');
+    const name = window.TAL_fileName ? window.TAL_fileName(kind, out, 'xlsx')   // <source>_extreme_listing_<dates>.xlsx
+                                     : kind + '.xlsx';
     const btn = $q('[data-dl=csv]');
     const label = btn.textContent;
     btn.disabled = true; btn.textContent = 'Creating Excel file...';

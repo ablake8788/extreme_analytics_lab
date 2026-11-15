@@ -149,6 +149,7 @@
         <button id="downloadReportBtn" class="secondary">Download report (Markdown)</button>
       </div>
     </div>
+    <div id="reportFiles"></div>
     <img id="reportChartImg" style="max-width:100%; border-radius:10px; border:1px solid var(--line); margin:14px 0">
     <div id="reportFindings"></div>
   </section>
@@ -157,6 +158,7 @@
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>
   <script src="{{ url_for('static', filename='js/xlsx_export.js') }}"></script>
   <script src="{{ url_for('static', filename='js/ai_report.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/stat_report.js') }}"></script>
   <script src="{{ url_for('static', filename='js/theme.js') }}"></script>
   <script src="{{ url_for('static', filename='js/data_listing.js') }}"></script>
   <script src="{{ url_for('static', filename='js/build_badge.js') }}"></script>

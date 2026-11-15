@@ -238,16 +238,95 @@ def report():
         chart_b64 = chart_png_base64(result.table, value_column, ext_params)
         markdown = generate_markdown_report(
             result.table, result.summary, ext_params, chg_params,
-            value_column=value_column, source_filename=filename,
+            value_column=value_column, source_filename=_original_name(data, filename),
         )
     except Exception as exc:
         return jsonify({"error": f"Could not generate report: {exc}"}), 500
 
+    from app.routes.ai_report import file_base, period_tag
+    ts = pd.to_datetime(result.table["Timestamp"], errors="coerce").dropna()
+    base = file_base(data.get("file_base") or _original_name(data, filename))
+    period = period_tag(ts.min() if len(ts) else "", ts.max() if len(ts) else "")
     return jsonify({
         "chart_png_base64": chart_b64,
         "markdown": markdown,
         "summary": result.summary,
+        "file_base": base,
+        "period": period,
+        "base_name": f"{base}_report_{period}",
     })
+
+
+@api_bp.post("/report/files")
+def report_files():
+    """The Generated report as files, like the AI report: Word (.docx) and/or Excel (.xlsx).
+    JSON: the analyze payload + location, units, format = docx | xlsx | both, include_data.
+    Files are named <source file base>_report_<YYYYMMDD>-<YYYYMMDD>.docx / .xlsx and are opened,
+    saved or downloaded through /api/ai-report/open|file|copy/<token>."""
+    from pathlib import Path as _Path
+
+    from app.ai_settings import load_ai_settings
+    from app.routes import ai_report as ar
+    from app.services.report_generator import render_chart_png
+    from app.services.stat_report_files import build_docx, build_xlsx
+
+    data = request.get_json(force=True) or {}
+    fmt = str(data.get("format") or "both").strip().lower()
+    if fmt not in ("docx", "xlsx", "both"):
+        return jsonify({"error": "format must be docx, xlsx or both."}), 400
+    try:
+        timestamps, values, ext_params, chg_params, weights, filename = _load_series_and_params(data)
+        result = run_analysis(timestamps, values, ext_params, chg_params, weights, gap_times=_gap_times())
+    except DataLoadError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except (KeyError, ValueError, TypeError) as exc:
+        return jsonify({"error": f"Invalid parameters: {exc}"}), 400
+
+    value_column = data.get("value_column", "Value")
+    filename = _original_name(data, filename)
+    location = str(data.get("location") or "").strip()[:120] or value_column.split("[")[0].strip() or "Sensor"
+    units = str(data.get("units") or "").strip()[:12]
+    include_data = str(data.get("include_data", "1")).strip().lower() not in ("0", "false", "no")
+    ts = pd.to_datetime(result.table["Timestamp"], errors="coerce").dropna()
+    start, end = (str(ts.min()), str(ts.max())) if len(ts) else ("", "")
+    base = f"{ar.file_base(data.get('file_base') or filename)}_report_{ar.period_tag(start, end)}"
+    heading = f"{location} - Statistical report" + (f" ({units})" if units else "")
+    try:
+        chart = render_chart_png(result.table, value_column, ext_params)
+        markdown = generate_markdown_report(result.table, result.summary, ext_params, chg_params,
+                                            value_column=value_column, source_filename=filename)
+        files = []
+        if fmt in ("docx", "both"):
+            files.append((base + ".docx", build_docx(markdown, chart, heading)))
+        if fmt in ("xlsx", "both"):
+            files.append((base + ".xlsx", build_xlsx(markdown, chart, result.table, include_data, heading)))
+    except Exception as exc:
+        return jsonify({"error": f"Could not build the report files: {exc}"}), 500
+
+    s = load_ai_settings()
+    facts = {"period_start": start, "period_end": end, "location": location, "units": units,
+             "report_type": "statistical", "value_column": value_column, "source_file": filename,
+             **{k: v for k, v in (result.summary or {}).items()}}
+    text = {"content": None, "source": "built-in", "model": "", "removed_sentences": [],
+            "note": "Statistical report (no AI)"}
+    reports = []
+    for name, blob in files:
+        saved = ar._save_copy(s.output_folder, name, blob) if ar._mode() == "local" else ""
+        token = ar._store(blob, name)
+        ar._keep_snapshot(token, facts, text, location, units, "all")
+        reports.append({"token": token, "filename": name, "size": len(blob), "saved_to": saved,
+                        "kind": _Path(name).suffix.lstrip(".")})
+    return jsonify({"reports": reports, "base_name": base, "can_open": ar._can_open(),
+                    "folder": str(s.output_folder) if (ar._mode() == "local" and s.output_folder) else ""})
+
+
+def _original_name(data: dict, fallback: str) -> str:
+    """The uploaded file's own name (or the Live point), not the internal upload token."""
+    try:
+        path = _resolve_path(data.get("token", ""))
+        return (history_writer.recall(path).get("filename") if path else None) or fallback
+    except Exception:
+        return fallback
 
 
 def _clean_record(r: dict) -> dict:

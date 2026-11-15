@@ -611,8 +611,9 @@
     g.textAlign = 'right';
     g.fillText(`Saved ${new Date().toLocaleString()}${badge ? '  ' + badge[0] : ''}`, outW - margin, ly + 5 * dpr);
 
-    const name = `extreme_chart_${safe(seriesName())}_${stamp(first.Timestamp)}_to_${stamp(last.Timestamp)}` +
-      `_p${S.page + 1}${full ? '_full' : '_view'}.png`;
+    const name = window.TAL_fileName   // <source>_extreme_chart_p<N>_full|view_<dates>.png
+      ? window.TAL_fileName(`extreme_chart_p${S.page + 1}_${full ? 'full' : 'view'}`, [first, last], 'png')
+      : `extreme_chart_${safe(seriesName())}_${stamp(first.Timestamp)}_to_${stamp(last.Timestamp)}_p${S.page + 1}${full ? '_full' : '_view'}.png`;
     out.toBlob((blob) => {
       if (!blob) { flash('Could not create the image - try fewer points per page.'); return; }
       download(blob, name);
@@ -628,7 +629,9 @@
       'MaterialChangeFlag', 'MaterialityScore'];
     const cols = preferred.filter((c) => c in data[0]).concat(Object.keys(data[0]).filter((c) => !preferred.includes(c)));
     const first = data[0], last = data[data.length - 1];
-    const name = `extreme_data_${safe(seriesName())}_${stamp(first.Timestamp)}_to_${stamp(last.Timestamp)}_p${S.page + 1}.xlsx`;
+    const name = window.TAL_fileName   // <source>_extreme_data_p<N>_<dates>.xlsx
+      ? window.TAL_fileName(`extreme_data_p${S.page + 1}`, data, 'xlsx')
+      : `extreme_data_${safe(seriesName())}_${stamp(first.Timestamp)}_to_${stamp(last.Timestamp)}_p${S.page + 1}.xlsx`;
     flash('Creating the Excel file...');
     try {
       const blob = await window.XlsxExport.fromRecords(data, { columns: cols, sheetName: 'Data', about: [

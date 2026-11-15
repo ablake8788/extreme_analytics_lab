@@ -157,7 +157,8 @@
     const list = chosenRows();
     if (!list || !list.length) { status('Run an analysis first.', 'error'); return; }
     const loc = $('[data-ar=location]').value.trim();
-    const name = `results_${safe(loc)}_${ymd(list[0].Timestamp)}-${ymd(list[list.length - 1].Timestamp)}.xlsx`;
+    const name = window.TAL_fileName ? window.TAL_fileName('results', list, 'xlsx')       // <source>_results_<dates>.xlsx
+                                     : `results_${safe(loc)}_${ymd(list[0].Timestamp)}-${ymd(list[list.length - 1].Timestamp)}.xlsx`;
     try {
       const r = await saveAs(name, 'xlsx', () => window.XlsxExport.fromRecords(list, { columns: orderedColumns(list), sheetName: 'Results',
         about: [['Exported', new Date().toLocaleString()], ['Location', loc || 'Sensor'], ['Rows', list.length],
@@ -208,6 +209,8 @@
       fd.append('format', format);
       fd.append('include_data', $('[data-ar=incdata]').checked ? '1' : '0');
       fd.append('scope', source);
+      // reports are named after the source file: <source>_AI_<dates>.docx / .xlsx
+      fd.append('file_base', source === 'file' ? (savedCsvFile ? savedCsvFile.name : '') : (window.TAL_SOURCE_NAME || ''));
       const hs = window.TAL_HISTORY_STATUS || {};
       if (source !== 'file' && hs.auto_save && window.TAL_HISTORY_RUN_ID) fd.append('run_id', window.TAL_HISTORY_RUN_ID);
       const res = await fetch('/api/ai-report', { method: 'POST', body: fd });

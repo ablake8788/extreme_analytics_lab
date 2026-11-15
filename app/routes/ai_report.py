@@ -2,7 +2,7 @@
 ai_report.py - API for AI results reports.
 
   GET  /api/ai-report/status   what is configured (never returns the API key)
-  POST /api/ai-report          multipart: file=<results CSV>, location, units,
+  POST /api/ai-report          multipart: file=<results CSV>, location, units, file_base (source file name),
                                format = docx | xlsx | both (default docx),
                                include_data = 1 | 0 (Excel: add the Data tab),
                                run_id + scope (optional: save to the history database)
@@ -116,11 +116,41 @@ def read_reference_text(path: Path | None) -> str:
         return ""
 
 
-def report_filename(location: str, facts: dict) -> str:
+# File names of every export: <source file base>_<kind>_<YYYYMMDD>-<YYYYMMDD>.<ext>
+#   La-Z-Boy_Jensen_Beach_AHU1_temperature_42k.xlsx -> La_Z_Boy_Jensen_Beach_AI_20250801-20250925.docx
+# The base is the source file name, at most NAME_BASE_MAX characters, cut after a whole word.
+# The same rule is in app.js (TAL_fileBase) for the files the browser makes.
+_EXT = re.compile(r"\.[A-Za-z0-9]{2,5}$")
+_LIVE_TAIL = re.compile(r"\s+\d{4}-\d{2}-\d{2}\s+to\s+\d{4}-\d{2}-\d{2}(\s*\(live\))?$", re.I)
+_KIND_TAIL = re.compile(r"_(AI|report|results|chart|extreme_listing|extreme_data|extreme_chart)(_[A-Za-z0-9]+)*_\d{8}-\d{8}$", re.I)
+
+
+def file_base(name: str, limit: int = NAME_BASE_MAX) -> str:
+    stem = _EXT.sub("", str(name or "").strip())
+    stem = _LIVE_TAIL.sub("", stem)                    # Live system: "<site> - <point> <from> to <to> (live)"
+    stem = re.sub(r"[^A-Za-z0-9]+", "_", stem).strip("_")
+    stem = _KIND_TAIL.sub("", stem)                    # a file made by this app: keep only its base
+    if len(stem) > limit:
+        cut = stem[:limit]
+        if stem[limit] != "_" and "_" in cut:          # do not end in the middle of a word
+            cut = cut[:cut.rindex("_")]
+        stem = cut
+    return stem.strip("_") or "data"
+
+
+def period_tag(start, end) -> str:
+    a = str(start or "")[:10].replace("-", "") or "00000000"
+    b = str(end or "")[:10].replace("-", "") or "00000000"
+    return f"{a}-{b}"
+
+
+def report_filename(location: str, facts: dict, source_name: str = "", kind: str = "AI") -> str:
+    """With source_name: <file base>_<kind>_<dates>.docx; without: the older <location>_<dates>.docx."""
+    period = period_tag(facts["period_start"], facts["period_end"])
+    if source_name:
+        return f"{file_base(source_name)}_{kind}_{period}.docx"
     base = re.sub(r"[^A-Za-z0-9]+", "_", location or "Sensor").strip("_")[:NAME_BASE_MAX].strip("_") or "Sensor"
-    a = facts["period_start"][:10].replace("-", "")
-    b = facts["period_end"][:10].replace("-", "")
-    return f"{base}_{a}-{b}.docx"
+    return f"{base}_{period}.docx"
 
 
 def _can_open() -> bool:
@@ -210,7 +240,8 @@ def make_report():
     ref_text = read_reference_text(s.reference_document)
     ref_name = s.reference_document.name if (s.reference_document and s.reference_document.exists()) else None
     text = write_report_text(facts, ref_text, s.api_key, s.model, s.timeout_seconds)
-    base = report_filename(location, facts)[:-len(".docx")]
+    source_name = (request.form.get("file_base") or "").strip()[:200]   # the analysed source file (sent by the page)
+    base = report_filename(location, facts, source_name, "AI")[:-len(".docx")]
 
     files = []
     if fmt in ("docx", "both"):

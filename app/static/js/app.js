@@ -21,6 +21,40 @@ $('uploadBtn').onclick = async () => {
   }
 };
 
+// ------------------------------------------------------------ file names of every export
+// <source file base>_<kind>_<YYYYMMDD>-<YYYYMMDD>.<ext>, e.g.
+//   La-Z-Boy_Jensen_Beach_AHU1_temperature_42k.xlsx -> La_Z_Boy_Jensen_Beach_extreme_listing_20250801-20250925.xlsx
+// The base is the source file name, at most 24 characters, cut after a whole word (same rule
+// as file_base() in routes/ai_report.py, which names the Word / Excel reports).
+const TAL_NAME_BASE_MAX = 24;
+window.TAL_fileBase = function (name) {
+  let s = String(name == null ? (window.TAL_SOURCE_NAME || '') : name).trim();
+  s = s.replace(/\.[A-Za-z0-9]{2,5}$/, '')
+       .replace(/\s+\d{4}-\d{2}-\d{2}\s+to\s+\d{4}-\d{2}-\d{2}(\s*\(live\))?$/i, '')     // Live system name
+       .replace(/[^A-Za-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+       .replace(/_(AI|report|results|chart|extreme_listing|extreme_data|extreme_chart)(_[A-Za-z0-9]+)*_\d{8}-\d{8}$/i, '');
+  if (s.length > TAL_NAME_BASE_MAX) {
+    let cut = s.slice(0, TAL_NAME_BASE_MAX);
+    if (s[TAL_NAME_BASE_MAX] !== '_' && cut.includes('_')) cut = cut.slice(0, cut.lastIndexOf('_'));
+    s = cut;
+  }
+  return s.replace(/^_+|_+$/g, '') || 'data';
+};
+window.TAL_periodOf = function (rows) {
+  let a = '', b = '';
+  (rows || []).forEach((r) => {
+    const t = String((r && r.Timestamp) ?? '').replace('T', ' ');
+    if (!t) return;
+    if (!a || t < a) a = t;
+    if (!b || t > b) b = t;
+  });
+  const d = (t) => t.slice(0, 10).replace(/-/g, '') || '00000000';
+  return `${d(a)}-${d(b)}`;
+};
+window.TAL_fileName = function (kind, rows, ext, sourceName) {
+  return `${window.TAL_fileBase(sourceName)}_${kind}_${window.TAL_periodOf(rows)}.${ext}`;
+};
+
 // Shared by Upload and Live system (source.js): the token and columns of the loaded data.
 function onDataLoaded(data, statusEl) {
     currentToken = data.token;
@@ -264,10 +298,12 @@ $('reportBtn').onclick = async () => {
   $('reportStatus').textContent = 'Generating report...';
   $('reportBtn').disabled = true;
   try {
+    const extra = window.TAL_reportLocation ? { location: window.TAL_reportLocation(), units: window.TAL_reportUnits() } : {};
+    extra.file_base = window.TAL_SOURCE_NAME || '';
     const res = await fetch('/api/report', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(lastAnalyzePayload),
+      body: JSON.stringify(Object.assign({}, lastAnalyzePayload, extra)),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error);
@@ -277,6 +313,7 @@ $('reportBtn').onclick = async () => {
     $('reportPanel').style.display = 'block';
     $('reportStatus').textContent = '';
     $('reportPanel').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (window.TAL_statReportFiles) window.TAL_statReportFiles(Object.assign({}, lastAnalyzePayload, extra));   // Word + Excel files
   } catch (e) {
     $('reportStatus').textContent = e.message;
   } finally {
@@ -286,12 +323,13 @@ $('reportBtn').onclick = async () => {
 
 $('downloadChartBtn').onclick = () => {
   if (!lastReport) return;
-  downloadBlob(base64ToBlob(lastReport.chart_png_base64, 'image/png'), 'analysis_chart.png');
+  const r = lastReport;
+  downloadBlob(base64ToBlob(r.chart_png_base64, 'image/png'), r.file_base ? `${r.file_base}_chart_${r.period}.png` : 'analysis_chart.png');
 };
 
 $('downloadReportBtn').onclick = () => {
   if (!lastReport) return;
-  downloadBlob(new Blob([lastReport.markdown], { type: 'text/markdown' }), 'analysis_report.md');
+  downloadBlob(new Blob([lastReport.markdown], { type: 'text/markdown' }), `${lastReport.base_name || 'analysis_report'}.md`);   // <base>_report_<dates>.md
 };
 
 function base64ToBlob(b64, mime) {
